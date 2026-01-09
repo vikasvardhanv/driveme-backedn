@@ -17,9 +17,6 @@ export class EmailService {
 
         if (!host || !user || !pass) {
             const message = 'SMTP configuration is missing; email sending is disabled.';
-            if (isProduction) {
-                throw new Error(message);
-            }
             this.logger.warn(message);
             this.transporter = nodemailer.createTransport({ jsonTransport: true });
             return;
