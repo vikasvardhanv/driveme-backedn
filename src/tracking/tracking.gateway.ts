@@ -32,33 +32,12 @@ export class TrackingGateway implements OnGatewayConnection, OnGatewayDisconnect
 
   @SubscribeMessage('locationUpdate')
   async handleLocationUpdate(client: Socket, payload: { userId: string; lat: number; lng: number; speed: number; timestamp: string }) {
-    this.logger.verbose(`Received location from ${payload.userId}: ${payload.lat}, ${payload.lng}`);
+    this.broadcastVehicleUpdate(payload);
+  }
 
-    try {
-      // 1. Update In-Memory / Redis (for real-time dashboard)
-      // Broadcast to admins (specific vehicle)
-      this.server.emit(`vehicle:${payload.userId}`, payload);
-      // Broadcast to global channel for Dashboard
-      this.server.emit('vehicle:update', payload);
-
-      // 2. Persist to Database (PostGIS)
-      // In a real high-throughput scenario, you might buffer this or use a queue.
-      // For MVP, we update direct.
-
-      // Note: We need a vehicle associated with this user (driver)
-      // const vehicle = await this.prisma.vehicle.findFirst({ where: { driverId: payload.userId } });
-
-      // if (vehicle) {
-      //   await this.prisma.vehicle.update({
-      //     where: { id: vehicle.id },
-      //     data: {
-      //       currentLat: payload.lat,
-      //       currentLng: payload.lng,
-      //     }
-      //   });
-      // }
-    } catch (error) {
-      this.logger.error('Failed to process location update', error);
-    }
+  // Public method for AzugaService to call
+  broadcastVehicleUpdate(payload: { userId: string; lat: number; lng: number; speed: number; timestamp: string }) {
+    this.server.emit(`vehicle:${payload.userId}`, payload);
+    this.server.emit('vehicle:update', payload);
   }
 }

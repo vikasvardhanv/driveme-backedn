@@ -1,60 +1,73 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
+import { TrackingGateway } from '../tracking/tracking.gateway';
 
 @Injectable()
 export class AzugaService {
   private readonly logger = new Logger(AzugaService.name);
 
-  constructor(private prisma: PrismaService) { }
+  constructor(
+    private prisma: PrismaService,
+    private trackingGateway: TrackingGateway
+  ) { }
 
-  // Poll Azuga every 30 seconds for live vehicle data
-  // @Cron(CronExpression.EVERY_30_SECONDS)
-  @Cron('*/30 * * * * *')
-  async handleCron() {
-    this.logger.debug('Polling Azuga for live vehicle locations...');
+  async processWebhookData(payload: any) {
+    // Azuga Payload Structure (Example - adjust based on real docs)
+    // Assume payload has { serialNumber, latitude, longitude, speed, timestamp }
+    // Or it might be a list of events.
 
-    const isProduction = process.env.NODE_ENV === 'production';
-    const isMock = process.env.AZUGA_MOCK === 'true' || !isProduction;
+    // Determine structure. Usually webhooks send an event array.
+    // For MVP, handling a generic structure:
+    const vehicleData = payload; // or payload.vehicle or payload.events[0]
 
-    if (!isMock) {
-      this.logger.warn('Azuga API integration is not configured; skipping poll.');
-      return [];
+    if (!vehicleData || !vehicleData.serialNumber) {
+      this.logger.warn('Invalid Webhook Payload');
+      return;
     }
 
-    // ... (Mock Logic) ...
+    const { serialNumber, latitude, longitude, speed } = vehicleData;
 
-    // 1. Authenticate with Azuga (Get Token)
-    // const token = await this.getAccessToken();
+    try {
+      // Find vehicle by serial/vin (Assuming serialNumber maps to VIN or a custom field)
+      // For MVP, we assumed serialNumber matches our 'vin' or 'licensePlate'
+      let vehicle = await this.prisma.vehicle.findFirst({
+        where: { vin: serialNumber }
+      });
 
-    // 2. Fetch Live Data
-    // const response = await axios.get('https://api.azuga.com/v3/vehicle/live', { headers: { Authorization: token } });
-
-    // 3. Mock Response for MVP
-    const mockVehicles = [
-      {
-        serialNumber: 'OBD-12345',
-        vehicleName: 'Van-01',
-        latitude: 33.4484, // Phoenix
-        longitude: -112.0740,
-        speed: 45,
-        timestamp: new Date().toISOString(),
-      },
-      {
-        serialNumber: 'OBD-67890',
-        vehicleName: 'Sedan-02',
-        latitude: 33.4255, // Tempe
-        longitude: -111.9400,
-        speed: 30,
-        timestamp: new Date().toISOString(),
+      // If not found, try finding by name or just log warning
+      if (!vehicle) {
+        this.logger.warn(`Vehicle with Serial ${serialNumber} not found in DB.`);
+        return;
       }
-    ];
 
-    this.logger.log(`Received ${mockVehicles.length} vehicles from Azuga.`);
+      // Update DB
+      const updatedVehicle = await this.prisma.vehicle.update({
+        where: { id: vehicle.id },
+        data: {
+          currentLat: parseFloat(latitude),
+          currentLng: parseFloat(longitude),
+          // speed: speed // Add speed to schema if needed
+          updatedAt: new Date(),
+        }
+      });
 
-    // 4. Update Database (PostGIS)
-    // await this.trackingService.updateVehicleLocation(vehicle);
+      // Broadcast to Live Map
+      // We need a userId for the map. If vehicle has a driver, use driverId.
+      // If not, we might need to change map to support vehicleId-based updates.
+      // For now, if driverId exists, broadcast it.
+      if (updatedVehicle.driverId) {
+        this.trackingGateway.broadcastVehicleUpdate({
+          userId: updatedVehicle.driverId,
+          lat: updatedVehicle.currentLat!,
+          lng: updatedVehicle.currentLng!,
+          speed: parseFloat(speed) || 0,
+          timestamp: new Date().toISOString(),
+        });
+      }
 
-    return mockVehicles;
+    } catch (error) {
+      this.logger.error('Error processing Azuga Webhook', error);
+    }
   }
 }
