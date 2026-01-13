@@ -13,6 +13,7 @@ export class AzugaService {
   ) { }
 
   async processWebhookData(payload: any) {
+    this.logger.debug(`Processing Webhook Data: ${JSON.stringify(payload)}`);
     // Azuga Payload Structure (Example - adjust based on real docs)
     // Assume payload has { serialNumber, latitude, longitude, speed, timestamp }
     // Or it might be a list of events.
@@ -22,7 +23,7 @@ export class AzugaService {
     const vehicleData = payload; // or payload.vehicle or payload.events[0]
 
     if (!vehicleData || !vehicleData.serialNumber) {
-      this.logger.warn('Invalid Webhook Payload');
+      this.logger.warn('Invalid Webhook Payload: Missing serialNumber');
       return;
     }
 
@@ -41,6 +42,8 @@ export class AzugaService {
         return;
       }
 
+      this.logger.log(`Found Vehicle: ${vehicle.id} (Driver: ${vehicle.driverId})`);
+
       // Update DB
       const updatedVehicle = await this.prisma.vehicle.update({
         where: { id: vehicle.id },
@@ -52,11 +55,14 @@ export class AzugaService {
         }
       });
 
+      this.logger.log(`Updated Vehicle ${vehicle.id} coordinates to ${latitude}, ${longitude}`);
+
       // Broadcast to Live Map
       // We need a userId for the map. If vehicle has a driver, use driverId.
       // If not, we might need to change map to support vehicleId-based updates.
       // For now, if driverId exists, broadcast it.
       if (updatedVehicle.driverId) {
+        this.logger.log(`Broadcasting update for Driver ${updatedVehicle.driverId}`);
         this.trackingGateway.broadcastVehicleUpdate({
           userId: updatedVehicle.driverId,
           lat: updatedVehicle.currentLat!,
@@ -64,6 +70,8 @@ export class AzugaService {
           speed: parseFloat(speed) || 0,
           timestamp: new Date().toISOString(),
         });
+      } else {
+        this.logger.warn(`Vehicle ${vehicle.id} has no driver assigned. Skipping broadcast.`);
       }
 
     } catch (error) {

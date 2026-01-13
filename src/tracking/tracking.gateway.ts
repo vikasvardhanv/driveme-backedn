@@ -32,11 +32,13 @@ export class TrackingGateway implements OnGatewayConnection, OnGatewayDisconnect
 
   @SubscribeMessage('locationUpdate')
   async handleLocationUpdate(client: Socket, payload: { userId: string; lat: number; lng: number; speed: number; timestamp: string }) {
+    this.logger.debug(`Received locationUpdate from ${client.id}: ${JSON.stringify(payload)}`);
     this.broadcastVehicleUpdate(payload);
   }
 
   // Public method for AzugaService to call
   broadcastVehicleUpdate(payload: { userId: string; lat: number; lng: number; speed: number; timestamp: string }) {
+    this.logger.debug(`Broadcasting vehicle:update for ${payload.userId}`);
     this.server.emit(`vehicle:${payload.userId}`, payload);
     this.server.emit('vehicle:update', payload);
   }

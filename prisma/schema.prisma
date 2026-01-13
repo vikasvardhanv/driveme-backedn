@@ -4,7 +4,7 @@ generator client {
 }
 
 datasource db {
-  provider  = "postgresql"
+  provider   = "postgresql"
   extensions = [postgis]
 }
 
@@ -33,10 +33,13 @@ model Company {
   address          String
   phone            String
   email            String   // For sending daily reports
-  
+  city             String?
+  state            String?  @default("AZ")
+  zipCode          String?
+
   users            User[]
   trips            Trip[]
-  
+
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 }
@@ -52,10 +55,19 @@ model User {
   isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
-  
+
   companyId String?
   company   Company? @relation(fields: [companyId], references: [id])
-  
+
+  // Member-specific fields (for AHCCCS reporting)
+  ahcccsNumber      String?  // Member's AHCCCS ID
+  dateOfBirth       DateTime?
+  mailingAddress    String?
+
+  // Driver-specific fields
+  licenseNumber     String?
+  licenseExpiry     DateTime?
+
   driverTrips Trip[] @relation("DriverTrips")
   memberTrips Trip[] @relation("MemberTrips")
   vehicle     Vehicle?
@@ -66,51 +78,85 @@ model Vehicle {
   make            String
   model           String
   year            Int
-  licensePlate    String   @unique
+  licensePlate    String   @unique  // Vehicle License/Fleet ID
   vin             String   @unique
+  color           String?
+  vehicleType     String?  @default("Taxi") // Wheelchair Van, Taxi, Bus, Stretcher Car, Other
   driverId        String?  @unique
   driver          User?    @relation(fields: [driverId], references: [id])
-  
+
   // PostGIS location
   currentLat      Float?
   currentLng      Float?
-  
+
+  // Odometer tracking
+  currentOdometer Int?     // Current odometer reading
+
   isActive        Boolean  @default(true)
   updatedAt       DateTime @updatedAt
-  
+
   trips           Trip[]
 }
 
 model Trip {
   id                  String     @id @default(uuid())
-  memberId            String
-  member              User       @relation("MemberTrips", fields: [memberId], references: [id])
+  memberId            String?    // Made optional for guest bookings
+  member              User?      @relation("MemberTrips", fields: [memberId], references: [id])
   driverId            String?
   driver              User?      @relation("DriverTrips", fields: [driverId], references: [id])
   vehicleId           String?
   vehicle             Vehicle?   @relation(fields: [vehicleId], references: [id])
-  
+
   companyId           String?    // To know which provider header to use
   company             Company?   @relation(fields: [companyId], references: [id])
-  
+
   status              TripStatus @default(SCHEDULED)
-  
+  tripType            String     @default("one-way") // one-way, round-trip, multiple-stops
+
+  // Guest info (for public web form submissions)
+  customerName        String?
+  customerPhone       String?
+  customerEmail       String?
+  notes               String?
+
+  // Primary trip locations
   pickupAddress       String
-  pickupLat           Float
-  pickupLng           Float
-  
+  pickupLat           Float?
+  pickupLng           Float?
+
   dropoffAddress      String
-  dropoffLat          Float
-  dropoffLng          Float
-  
+  dropoffLat          Float?
+  dropoffLng          Float?
+
+  // For round trips - 2nd pickup/dropoff
+  secondPickupAddress   String?
+  secondPickupLat       Float?
+  secondPickupLng       Float?
+
+  secondDropoffAddress  String?
+  secondDropoffLat      Float?
+  secondDropoffLng      Float?
+
   scheduledPickupTime DateTime
   actualPickupTime    DateTime?
   actualDropoffTime   DateTime?
-  
+
+  // AHCCCS-specific fields
+  pickupOdometer      Int?       // Odometer reading at pickup
+  dropoffOdometer     Int?       // Odometer reading at dropoff
+  secondPickupOdometer  Int?     // For round trips
+  secondDropoffOdometer Int?     // For round trips
+  tripMiles           Float?     // Calculated trip distance
+
+  reasonForVisit      String?    // Reason for medical visit
+  escortName          String?    // Name of escort (if any)
+  escortRelationship  String?    // Relationship to member
+
   // For Reporting
   driverSignatureUrl  String?
   memberSignatureUrl  String?
-  
+  pdfReportUrl        String?    // URL to generated AHCCCS PDF report
+
   createdAt           DateTime   @default(now())
   updatedAt           DateTime   @updatedAt
 }
