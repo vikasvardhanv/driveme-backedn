@@ -15,7 +15,7 @@ export class PdfService {
     'ahcccs-daily-trip-report.pdf',
   );
 
-  constructor(private prisma: PrismaService) {}
+  constructor(private prisma: PrismaService) { }
 
   async generateTripReport(tripId: string): Promise<Buffer> {
     this.logger.log(`Generating AHCCCS Daily Trip Report for Trip: ${tripId}`);
@@ -290,7 +290,7 @@ export class PdfService {
 
   private setVehicleTypeCheckbox(form: PDFForm, vehicleType: string) {
     try {
-      const checkboxMap = {
+      const checkboxMap: Record<string, string> = {
         'Wheelchair Van': 'Wheelchair_Van',
         Taxi: 'Taxi',
         Bus: 'Bus',
@@ -316,7 +316,7 @@ export class PdfService {
     prefix: string,
   ) {
     try {
-      const checkboxMap = {
+      const checkboxMap: Record<string, string> = {
         'one-way': `${prefix}_One_Way`,
         'round-trip': `${prefix}_Round_Trip`,
         'multiple-stops': `${prefix}_Multiple_Stops`,
