@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { TrackingGateway } from '../tracking/tracking.gateway';
 
-interface CachedVehicle {
+export interface CachedVehicle {
   id: string;
   vehicleName: string;
   driverName: string | null;
