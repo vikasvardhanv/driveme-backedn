@@ -30,11 +30,18 @@ export class AuthService {
         }
 
         // 2. Verify Role Access
-        // The Dispatch Portal is accessible by ADMIN and DISPATCHER.
-        // We allow the login if the user has either role, regardless of what the frontend sent (since frontend hardcodes 'ADMIN')
-        const allowedRoles = ['ADMIN', 'DISPATCHER'];
-        if (!allowedRoles.includes(user.role)) {
-            throw new UnauthorizedException('Access denied: You must be an Admin or Dispatcher to log in here.');
+        // Check that the user's role matches the portal they're logging into
+        if (body.role === 'DRIVER') {
+            // Driver portal - only allow DRIVER role
+            if (user.role !== 'DRIVER') {
+                throw new UnauthorizedException('Access denied: You must be a Driver to log in here.');
+            }
+        } else {
+            // Dispatch portal - allow ADMIN and DISPATCHER
+            const allowedRoles = ['ADMIN', 'DISPATCHER'];
+            if (!allowedRoles.includes(user.role)) {
+                throw new UnauthorizedException('Access denied: You must be an Admin or Dispatcher to log in here.');
+            }
         }
 
         // Return user info + token
