@@ -1,5 +1,5 @@
 import { Body, Controller, Get, Logger, Post } from '@nestjs/common';
-import { AzugaService, CachedVehicle } from './azuga.service';
+import { AzugaService, CachedVehicle, CachedDriver } from './azuga.service';
 
 @Controller('azuga')
 export class AzugaController {
@@ -22,5 +22,10 @@ export class AzugaController {
     @Get('vehicles/locations')
     getVehicleLocations(): CachedVehicle[] {
         return this.azugaService.getCachedVehicles();
+    }
+
+    @Get('drivers')
+    getDrivers(): CachedDriver[] {
+        return this.azugaService.getCachedDrivers();
     }
 }

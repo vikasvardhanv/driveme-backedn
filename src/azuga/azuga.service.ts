@@ -19,17 +19,39 @@ export interface CachedVehicle {
   vin: string;
 }
 
+export interface CachedDriver {
+  id: string;
+  name: string;
+  email: string | null;
+  phone: string | null;
+  vehicleId: string | null;
+  vehicleName: string | null;
+  role: string;
+  timezone: string | null;
+  externalId: string | null;
+  isActive: boolean;
+}
+
 @Injectable()
 export class AzugaService {
   private readonly logger = new Logger(AzugaService.name);
 
   // In-memory cache of vehicle data from webhooks
   private vehicleCache: Map<string, CachedVehicle> = new Map();
+  // In-memory cache of driver data
+  private driverCache: Map<string, CachedDriver> = new Map();
 
   constructor(
     private prisma: PrismaService,
     private trackingGateway: TrackingGateway
   ) {}
+
+  /**
+   * Get all cached driver data
+   */
+  getCachedDrivers(): CachedDriver[] {
+    return Array.from(this.driverCache.values());
+  }
 
   /**
    * Get all cached vehicle data from webhooks
@@ -123,6 +145,24 @@ export class AzugaService {
 
     this.vehicleCache.set(vehicleId, cachedVehicle);
     this.logger.log(`Cached vehicle ${vehicleName}: ${latitude}, ${longitude} @ ${speed} mph (${ignitionStatus})`);
+
+    // Also cache driver info if present
+    if (driverName || event.driverId) {
+      const driverId = event.driverId || event.driverExternalId || `driver-${vehicleId}`;
+      const cachedDriver: CachedDriver = {
+        id: driverId,
+        name: driverName || 'Unknown Driver',
+        email: event.driverEmail || null,
+        phone: event.driverPhone || event.driverMobile || null,
+        vehicleId: vehicleId,
+        vehicleName: vehicleName,
+        role: event.driverRole || 'Driver',
+        timezone: event.timezone || null,
+        externalId: event.driverExternalId || null,
+        isActive: true,
+      };
+      this.driverCache.set(driverId, cachedDriver);
+    }
 
     // Broadcast to WebSocket for real-time updates
     this.trackingGateway.server.emit('vehicle:update', cachedVehicle);
