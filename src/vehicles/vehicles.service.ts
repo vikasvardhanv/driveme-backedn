@@ -39,7 +39,7 @@ export class VehiclesService {
           },
         },
       },
-      orderBy: { lastLocationUpdate: 'desc' },
+      orderBy: { updatedAt: 'desc' },
     });
 
     return vehicles.map(vehicle => ({

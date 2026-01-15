@@ -1,82 +1,157 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { TrackingGateway } from '../tracking/tracking.gateway';
+
+interface CachedVehicle {
+  id: string;
+  vehicleName: string;
+  driverName: string | null;
+  currentLat: number;
+  currentLng: number;
+  currentSpeed: number;
+  address: string | null;
+  lastLocationUpdate: string;
+  ignitionStatus: string;
+  status: 'moving' | 'idle' | 'offline';
+  isMoving: boolean;
+  make: string;
+  model: string;
+  vin: string;
+}
 
 @Injectable()
 export class AzugaService {
   private readonly logger = new Logger(AzugaService.name);
 
+  // In-memory cache of vehicle data from webhooks
+  private vehicleCache: Map<string, CachedVehicle> = new Map();
+
   constructor(
     private prisma: PrismaService,
     private trackingGateway: TrackingGateway
-  ) { }
+  ) {}
 
+  /**
+   * Get all cached vehicle data from webhooks
+   */
+  getCachedVehicles(): CachedVehicle[] {
+    const vehicles = Array.from(this.vehicleCache.values());
+
+    // Update status based on last update time
+    const now = new Date();
+    return vehicles.map(v => {
+      const lastUpdate = new Date(v.lastLocationUpdate);
+      const minutesAgo = (now.getTime() - lastUpdate.getTime()) / (1000 * 60);
+
+      let status: 'moving' | 'idle' | 'offline' = v.status;
+      if (minutesAgo > 10) {
+        status = 'offline';
+      }
+
+      return { ...v, status, isMoving: status === 'moving' };
+    });
+  }
+
+  /**
+   * Process webhook data from Azuga
+   * Handles various payload formats from Azuga webhooks
+   */
   async processWebhookData(payload: any) {
-    this.logger.debug(`Processing Webhook Data: ${JSON.stringify(payload)}`);
-    // Azuga Payload Structure (Example - adjust based on real docs)
-    // Assume payload has { serialNumber, latitude, longitude, speed, timestamp }
-    // Or it might be a list of events.
+    this.logger.log(`Received Azuga Webhook: ${JSON.stringify(payload)}`);
 
-    // Determine structure. Usually webhooks send an event array.
-    // For MVP, handling a generic structure:
-    const vehicleData = payload; // or payload.vehicle or payload.events[0]
+    try {
+      // Handle array of events
+      const events = Array.isArray(payload) ? payload :
+                     payload.events ? payload.events :
+                     payload.data ? (Array.isArray(payload.data) ? payload.data : [payload.data]) :
+                     [payload];
 
-    if (!vehicleData || !vehicleData.serialNumber) {
-      this.logger.warn('Invalid Webhook Payload: Missing serialNumber');
+      for (const event of events) {
+        await this.processVehicleEvent(event);
+      }
+    } catch (error) {
+      this.logger.error('Error processing Azuga Webhook', error);
+    }
+  }
+
+  private async processVehicleEvent(event: any) {
+    // Extract vehicle identifier (Azuga uses different field names)
+    const vehicleId = event.vehicleId || event.serialNumber || event.vin || event.assetId || event.deviceId;
+
+    if (!vehicleId) {
+      this.logger.warn('Webhook event missing vehicle identifier');
       return;
     }
 
-    const { serialNumber, latitude, longitude, speed } = vehicleData;
+    // Extract location data
+    const latitude = parseFloat(event.latitude || event.lat || event.gpsLatitude || 0);
+    const longitude = parseFloat(event.longitude || event.lng || event.gpsLongitude || 0);
+    const speed = parseFloat(event.speed || event.gpsSpeed || 0);
 
+    // Extract other info
+    const vehicleName = event.vehicleName || event.name || event.assetName || vehicleId;
+    const driverName = event.driverName || event.driver?.name || event.driverFirstName ?
+                       `${event.driverFirstName || ''} ${event.driverLastName || ''}`.trim() : null;
+    const address = event.address || event.location || event.streetAddress || null;
+    const ignitionStatus = event.ignitionStatus || event.ignition ||
+                          (event.eventType === 'IGNITION_ON' ? 'Ignition On' :
+                           event.eventType === 'IGNITION_OFF' ? 'Ignition Off' :
+                           speed > 0 ? 'Ignition On' : 'Ignition Off');
+
+    // Determine status
+    const isMoving = speed > 2;
+    const status: 'moving' | 'idle' | 'offline' = isMoving ? 'moving' :
+                  ignitionStatus.toLowerCase().includes('on') ? 'idle' : 'offline';
+
+    // Cache the vehicle data
+    const cachedVehicle: CachedVehicle = {
+      id: vehicleId,
+      vehicleName,
+      driverName,
+      currentLat: latitude,
+      currentLng: longitude,
+      currentSpeed: speed,
+      address,
+      lastLocationUpdate: event.timestamp || event.eventTime || new Date().toISOString(),
+      ignitionStatus,
+      status,
+      isMoving,
+      make: event.make || 'Unknown',
+      model: event.model || 'Unknown',
+      vin: event.vin || vehicleId,
+    };
+
+    this.vehicleCache.set(vehicleId, cachedVehicle);
+    this.logger.log(`Cached vehicle ${vehicleName}: ${latitude}, ${longitude} @ ${speed} mph (${ignitionStatus})`);
+
+    // Broadcast to WebSocket for real-time updates
+    this.trackingGateway.server.emit('vehicle:update', cachedVehicle);
+
+    // Also try to update DB if vehicle exists
     try {
-      // Find vehicle by serial/vin (Assuming serialNumber maps to VIN or a custom field)
-      // For MVP, we assumed serialNumber matches our 'vin' or 'licensePlate'
-      let vehicle = await this.prisma.vehicle.findFirst({
-        where: { vin: serialNumber }
-      });
-
-      // If not found, try finding by name or just log warning
-      if (!vehicle) {
-        this.logger.warn(`Vehicle with Serial ${serialNumber} not found in DB.`);
-        return;
-      }
-
-      this.logger.log(`Found Vehicle: ${vehicle.id} (Driver: ${vehicle.driverId})`);
-
-      // Update DB
-      const updatedVehicle = await this.prisma.vehicle.update({
-        where: { id: vehicle.id },
-        data: {
-          currentLat: parseFloat(latitude),
-          currentLng: parseFloat(longitude),
-          currentSpeed: parseFloat(speed) || 0,
-          lastLocationUpdate: new Date(),
-          updatedAt: new Date(),
+      const dbVehicle = await this.prisma.vehicle.findFirst({
+        where: {
+          OR: [
+            { vin: vehicleId },
+            { licensePlate: vehicleName },
+          ]
         }
       });
 
-      this.logger.log(`Updated Vehicle ${vehicle.id} coordinates to ${latitude}, ${longitude}`);
-
-      // Broadcast to Live Map
-      // We need a userId for the map. If vehicle has a driver, use driverId.
-      // If not, we might need to change map to support vehicleId-based updates.
-      // For now, if driverId exists, broadcast it.
-      if (updatedVehicle.driverId) {
-        this.logger.log(`Broadcasting update for Driver ${updatedVehicle.driverId}`);
-        this.trackingGateway.broadcastVehicleUpdate({
-          userId: updatedVehicle.driverId,
-          lat: updatedVehicle.currentLat!,
-          lng: updatedVehicle.currentLng!,
-          speed: parseFloat(speed) || 0,
-          timestamp: new Date().toISOString(),
+      if (dbVehicle) {
+        await this.prisma.vehicle.update({
+          where: { id: dbVehicle.id },
+          data: {
+            currentLat: latitude,
+            currentLng: longitude,
+            currentSpeed: speed,
+            lastLocationUpdate: new Date(),
+          }
         });
-      } else {
-        this.logger.warn(`Vehicle ${vehicle.id} has no driver assigned. Skipping broadcast.`);
       }
-
-    } catch (error) {
-      this.logger.error('Error processing Azuga Webhook', error);
+    } catch (dbError) {
+      // DB update is optional, don't fail if it errors
+      this.logger.debug(`DB update skipped for ${vehicleId}`);
     }
   }
 }
