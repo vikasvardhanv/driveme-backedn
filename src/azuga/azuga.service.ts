@@ -50,7 +50,8 @@ export class AzugaService {
         data: {
           currentLat: parseFloat(latitude),
           currentLng: parseFloat(longitude),
-          // speed: speed // Add speed to schema if needed
+          currentSpeed: parseFloat(speed) || 0,
+          lastLocationUpdate: new Date(),
           updatedAt: new Date(),
         }
       });

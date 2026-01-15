@@ -88,6 +88,8 @@ model Vehicle {
   // PostGIS location
   currentLat      Float?
   currentLng      Float?
+  currentSpeed    Float?   // Current speed from Azuga (mph)
+  lastLocationUpdate DateTime? // When location was last updated from Azuga
 
   // Odometer tracking
   currentOdometer Int?     // Current odometer reading

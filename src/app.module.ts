@@ -10,6 +10,7 @@ import { ReportsModule } from './reports/reports.module';
 import { EmailModule } from './email/email.module';
 import { AuthModule } from './auth/auth.module';
 import { TripsModule } from './trips/trips.module';
+import { VehiclesModule } from './vehicles/vehicles.module';
 
 @Module({
   imports: [
@@ -20,7 +21,8 @@ import { TripsModule } from './trips/trips.module';
     ReportsModule,
     EmailModule,
     AuthModule,
-    TripsModule
+    TripsModule,
+    VehiclesModule
   ],
   controllers: [AppController],
   providers: [AppService, TrackingGateway],
