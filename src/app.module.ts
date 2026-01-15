@@ -4,7 +4,7 @@ import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { AzugaModule } from './azuga/azuga.module';
 import { PrismaModule } from './prisma/prisma.module';
-import { TrackingGateway } from './tracking/tracking.gateway';
+import { TrackingModule } from './tracking/tracking.module';
 import { CompaniesModule } from './companies/companies.module';
 import { ReportsModule } from './reports/reports.module';
 import { EmailModule } from './email/email.module';
@@ -16,6 +16,7 @@ import { VehiclesModule } from './vehicles/vehicles.module';
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
     PrismaModule,
+    TrackingModule,
     AzugaModule,
     CompaniesModule,
     ReportsModule,
@@ -25,6 +26,6 @@ import { VehiclesModule } from './vehicles/vehicles.module';
     VehiclesModule
   ],
   controllers: [AppController],
-  providers: [AppService, TrackingGateway],
+  providers: [AppService],
 })
 export class AppModule { }
