@@ -56,4 +56,8 @@ export class TripsController {
       });
     }
   }
+  @Get('drivers/list')
+  getDrivers() {
+    return this.tripsService.findAllDrivers();
+  }
 }

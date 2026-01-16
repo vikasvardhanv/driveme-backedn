@@ -281,4 +281,16 @@ export class TripsService {
       where: { id },
     });
   }
+  async findAllDrivers() {
+    return this.prisma.user.findMany({
+      where: { role: 'DRIVER' },
+      select: {
+        id: true,
+        firstName: true,
+        lastName: true,
+        email: true,
+        isActive: true,
+      },
+    });
+  }
 }
