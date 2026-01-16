@@ -5,6 +5,7 @@ import { UpdateTripDto } from './dto/update-trip.dto';
 import { Prisma } from '@prisma/client';
 import { PdfService } from '../pdf/pdf.service';
 import { EmailService } from '../email/email.service';
+import { TrackingGateway } from '../tracking/tracking.gateway';
 
 @Injectable()
 export class TripsService {
@@ -14,6 +15,7 @@ export class TripsService {
     private prisma: PrismaService,
     private pdfService: PdfService,
     private emailService: EmailService,
+    private trackingGateway: TrackingGateway,
   ) { }
 
   async create(createTripDto: CreateTripDto) {
@@ -52,9 +54,21 @@ export class TripsService {
         data.company = { connect: { id: createTripDto.companyId } };
       }
 
-      const trip = await this.prisma.trip.create({ data });
+      const trip = await this.prisma.trip.create({
+        data,
+        include: {
+          driver: true,
+          member: true,
+          vehicle: true,
+          company: true,
+        },
+      });
 
       this.logger.log(`Trip created with ID: ${trip.id}`);
+
+      // Broadcast trip creation to all dispatchers
+      this.trackingGateway.broadcastTripUpdate(trip);
+
       return trip;
     } catch (error) {
       this.logger.error(`Error creating trip: ${error.message}`, error.stack);
@@ -124,13 +138,38 @@ export class TripsService {
       updateData.vehicle = { connect: { id: updateTripDto.vehicleId } };
     }
 
+    // Get the current trip to check for driver assignment changes
+    const currentTrip = await this.prisma.trip.findUnique({
+      where: { id },
+      select: { driverId: true, status: true },
+    });
+
     const updatedTrip = await this.prisma.trip.update({
       where: { id },
       data: updateData,
+      include: {
+        driver: true,
+        member: true,
+        vehicle: true,
+        company: true,
+      },
     });
 
+    // Check if driver was just assigned (new assignment)
+    const wasDriverAssigned = updateTripDto.driverId &&
+      currentTrip?.driverId !== updateTripDto.driverId;
+
+    if (wasDriverAssigned) {
+      this.logger.log(`Trip ${id} assigned to driver ${updateTripDto.driverId}`);
+      // Broadcast to the specific driver via WebSocket
+      this.trackingGateway.broadcastTripAssignment(updateTripDto.driverId, updatedTrip);
+    } else {
+      // Broadcast general trip update
+      this.trackingGateway.broadcastTripUpdate(updatedTrip);
+    }
+
     // Check if trip was just completed - trigger PDF generation and email
-    if (updateTripDto.status === 'COMPLETED' && updateData.status === 'COMPLETED') {
+    if (updateTripDto.status === 'COMPLETED') {
       this.logger.log(`Trip ${id} marked as COMPLETED - triggering PDF generation`);
       // Run PDF generation in background (don't block the response)
       this.generateAndEmailTripReport(id).catch((error) => {
@@ -139,6 +178,11 @@ export class TripsService {
           error.stack,
         );
       });
+    }
+
+    // Check if trip was cancelled
+    if (updateTripDto.status === 'CANCELLED') {
+      this.trackingGateway.broadcastTripCancellation(id, currentTrip?.driverId);
     }
 
     return updatedTrip;
