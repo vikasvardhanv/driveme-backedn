@@ -162,7 +162,7 @@ export class TripsService {
     if (wasDriverAssigned) {
       this.logger.log(`Trip ${id} assigned to driver ${updateTripDto.driverId}`);
       // Broadcast to the specific driver via WebSocket
-      this.trackingGateway.broadcastTripAssignment(updateTripDto.driverId, updatedTrip);
+      this.trackingGateway.broadcastTripAssignment(updateTripDto.driverId!, updatedTrip);
     } else {
       // Broadcast general trip update
       this.trackingGateway.broadcastTripUpdate(updatedTrip);
@@ -182,7 +182,7 @@ export class TripsService {
 
     // Check if trip was cancelled
     if (updateTripDto.status === 'CANCELLED') {
-      this.trackingGateway.broadcastTripCancellation(id, currentTrip?.driverId);
+      this.trackingGateway.broadcastTripCancellation(id, currentTrip?.driverId || undefined);
     }
 
     return updatedTrip;
