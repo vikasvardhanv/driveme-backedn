@@ -11,6 +11,7 @@ import { EmailModule } from './email/email.module';
 import { AuthModule } from './auth/auth.module';
 import { TripsModule } from './trips/trips.module';
 import { VehiclesModule } from './vehicles/vehicles.module';
+import { ApplicationsModule } from './applications/applications.module';
 
 @Module({
   imports: [
@@ -23,7 +24,8 @@ import { VehiclesModule } from './vehicles/vehicles.module';
     EmailModule,
     AuthModule,
     TripsModule,
-    VehiclesModule
+    VehiclesModule,
+    ApplicationsModule
   ],
   controllers: [AppController],
   providers: [AppService],

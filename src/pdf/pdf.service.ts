@@ -12,7 +12,7 @@ export class PdfService {
     '..',
     '..',
     'templates',
-    'ahcccs-daily-trip-report.pdf',
+    'AHCCCSDailyTripReportFinal.pdf',
   );
 
   constructor(private prisma: PrismaService) { }
@@ -56,6 +56,9 @@ export class PdfService {
 
       // Fill in Trip Details
       this.fillTripDetails(form, trip);
+
+      // Embed signatures if available
+      await this.embedSignatures(pdfDoc, trip);
 
       // Flatten the form to make it non-editable
       form.flatten();
@@ -331,6 +334,99 @@ export class PdfService {
       }
     } catch (error) {
       this.logger.debug(`Could not set trip type checkbox: ${error.message}`);
+    }
+  }
+
+  /**
+   * Embed driver and member signatures into the PDF
+   * Signatures are stored as base64 data URLs (data:image/png;base64,...)
+   */
+  private async embedSignatures(pdfDoc: PDFDocument, trip: any): Promise<void> {
+    try {
+      const pages = pdfDoc.getPages();
+      const firstPage = pages[0];
+      const { width, height } = firstPage.getSize();
+
+      // Signature dimensions and positions (adjust based on your PDF template)
+      const signatureWidth = 150;
+      const signatureHeight = 50;
+
+      // Driver signature position (bottom left area of form)
+      const driverSignatureX = 50;
+      const driverSignatureY = 80;
+
+      // Member signature position (bottom right area of form)
+      const memberSignatureX = width - signatureWidth - 50;
+      const memberSignatureY = 80;
+
+      // Embed driver signature if available
+      if (trip.driverSignatureUrl) {
+        try {
+          const driverSigImage = await this.embedBase64Image(pdfDoc, trip.driverSignatureUrl);
+          if (driverSigImage) {
+            firstPage.drawImage(driverSigImage, {
+              x: driverSignatureX,
+              y: driverSignatureY,
+              width: signatureWidth,
+              height: signatureHeight,
+            });
+            this.logger.log('Embedded driver signature in PDF');
+          }
+        } catch (err) {
+          this.logger.warn(`Could not embed driver signature: ${err.message}`);
+        }
+      }
+
+      // Embed member signature if available
+      if (trip.memberSignatureUrl) {
+        try {
+          const memberSigImage = await this.embedBase64Image(pdfDoc, trip.memberSignatureUrl);
+          if (memberSigImage) {
+            firstPage.drawImage(memberSigImage, {
+              x: memberSignatureX,
+              y: memberSignatureY,
+              width: signatureWidth,
+              height: signatureHeight,
+            });
+            this.logger.log('Embedded member signature in PDF');
+          }
+        } catch (err) {
+          this.logger.warn(`Could not embed member signature: ${err.message}`);
+        }
+      }
+    } catch (error) {
+      this.logger.warn(`Could not embed signatures: ${error.message}`);
+    }
+  }
+
+  /**
+   * Convert base64 data URL to embedded PDF image
+   */
+  private async embedBase64Image(pdfDoc: PDFDocument, dataUrl: string) {
+    if (!dataUrl || !dataUrl.startsWith('data:image')) {
+      return null;
+    }
+
+    // Extract base64 data after the comma
+    const base64Data = dataUrl.split(',')[1];
+    if (!base64Data) {
+      return null;
+    }
+
+    const imageBytes = Buffer.from(base64Data, 'base64');
+
+    // Determine image type and embed accordingly
+    if (dataUrl.includes('image/png')) {
+      return pdfDoc.embedPng(imageBytes);
+    } else if (dataUrl.includes('image/jpeg') || dataUrl.includes('image/jpg')) {
+      return pdfDoc.embedJpg(imageBytes);
+    }
+
+    // Default to PNG for unknown formats
+    try {
+      return pdfDoc.embedPng(imageBytes);
+    } catch {
+      return pdfDoc.embedJpg(imageBytes);
     }
   }
 
