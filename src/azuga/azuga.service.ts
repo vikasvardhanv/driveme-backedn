@@ -110,49 +110,48 @@ export class AzugaService {
     }
 
     try {
-      try {
-        // Reverting to raw key encoding (no colon) for debugging
-        const authHeader = `Basic ${Buffer.from(this.azugaApiKey).toString('base64')}`;
+      // Reverting to raw key encoding (no colon) for debugging
+      const authHeader = `Basic ${Buffer.from(this.azugaApiKey).toString('base64')}`;
 
-        // Moving params to Query String as body POST failed with 400, but URL params triggered 429 (Auth success)
-        const endpoint = `https://api.azuga.com/azuga-ws/v1/users.json?userType=driver&limit=100&page=1`;
-        this.logger.log(`Azuga Auth Debug: KeyLoaded=${!!this.azugaApiKey}, KeyLen=${this.azugaApiKey?.length}, Header=${authHeader.substring(0, 15)}...`);
-        this.logger.log(`Fetching Drivers from: ${endpoint} [POST]`);
+      // Moving params to Query String as body POST failed with 400, but URL params triggered 429 (Auth success)
+      const endpoint = `https://api.azuga.com/azuga-ws/v1/users.json?userType=driver&limit=100&page=1`;
+      this.logger.log(`Azuga Auth Debug: KeyLoaded=${!!this.azugaApiKey}, KeyLen=${this.azugaApiKey?.length}, Header=${authHeader.substring(0, 15)}...`);
+      this.logger.log(`Fetching Drivers from: ${endpoint} [POST]`);
 
-        const response = await fetch(
-          endpoint,
-          {
-            method: 'POST',
-            headers: {
-              'Authorization': authHeader,
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({}), // Explicit empty body
-          }
-        );
-
-        if (!response.ok) {
-          throw new Error(`Azuga API error: ${response.status} ${response.statusText}`);
+      const response = await fetch(
+        endpoint,
+        {
+          method: 'POST',
+          headers: {
+            'Authorization': authHeader,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({}), // Explicit empty body
         }
+      );
 
-        const data = await response.json();
-        this.logger.log(`Fetched ${data.length || 0} drivers from Azuga API`);
-
-        // Handle different response formats
-        if (Array.isArray(data)) {
-          return data;
-        } else if (data.users && Array.isArray(data.users)) {
-          return data.users;
-        } else if (data.data && Array.isArray(data.data)) {
-          return data.data;
-        }
-
-        return [];
-      } catch (error) {
-        this.logger.error('Failed to fetch drivers from Azuga API', error);
-        throw error;
+      if (!response.ok) {
+        throw new Error(`Azuga API error: ${response.status} ${response.statusText}`);
       }
+
+      const data = await response.json();
+      this.logger.log(`Fetched ${data.length || 0} drivers from Azuga API`);
+
+      // Handle different response formats
+      if (Array.isArray(data)) {
+        return data;
+      } else if (data.users && Array.isArray(data.users)) {
+        return data.users;
+      } else if (data.data && Array.isArray(data.data)) {
+        return data.data;
+      }
+
+      return [];
+    } catch (error) {
+      this.logger.error('Failed to fetch drivers from Azuga API', error);
+      throw error;
     }
+  }
 
   /**
    * Generate a random temporary password
