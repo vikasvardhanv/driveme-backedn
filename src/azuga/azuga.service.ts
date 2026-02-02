@@ -545,6 +545,9 @@ export class AzugaService {
           }
           result.synced++;
 
+          // Cache the vehicle
+          this.cacheVehicleFromApi(vehicle);
+
         } catch (vError) {
           result.errors.push(`Failed to sync vehicle ${vehicle.vehicleName}: ${vError.message}`);
         }
@@ -556,5 +559,38 @@ export class AzugaService {
       result.errors.push(error.message);
       return result;
     }
+  }
+
+  /**
+   * Cache vehicle from Azuga API response
+   */
+  private cacheVehicleFromApi(vehicle: any) {
+    const vin = vehicle.vin || vehicle.deviceSerial || vehicle.serialNumber;
+    if (!vin) return;
+
+    const vehicleName = vehicle.licensePlate || vehicle.vehicleName || vehicle.name || vin;
+    const speed = vehicle.speed ? parseFloat(vehicle.speed) : 0;
+
+    // Check existing cache to preserve location if API response lacks it
+    const existingCache = this.vehicleCache.get(vin);
+
+    const cachedVehicle: CachedVehicle = {
+      id: vin,
+      vehicleName,
+      driverName: vehicle.driverName || (existingCache?.driverName) || null,
+      currentLat: vehicle.latitude ? parseFloat(vehicle.latitude) : (existingCache?.currentLat || 0),
+      currentLng: vehicle.longitude ? parseFloat(vehicle.longitude) : (existingCache?.currentLng || 0),
+      currentSpeed: speed,
+      address: vehicle.location || (existingCache?.address) || null,
+      lastLocationUpdate: new Date().toISOString(),
+      ignitionStatus: existingCache?.ignitionStatus || 'Unknown',
+      status: speed > 0 ? 'moving' : (existingCache?.status || 'offline'),
+      isMoving: speed > 0,
+      make: vehicle.make || 'Unknown',
+      model: vehicle.model || 'Unknown',
+      vin: vin,
+    };
+
+    this.vehicleCache.set(vin, cachedVehicle);
   }
 }

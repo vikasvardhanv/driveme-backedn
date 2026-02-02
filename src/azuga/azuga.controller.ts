@@ -37,6 +37,7 @@ export class AzugaController {
         return this.azugaService.getCachedVehicles();
     }
 
+    @Get('drivers')
     async getDrivers(): Promise<CachedDriver[]> {
         const cachedDrivers = this.azugaService.getCachedDrivers();
 
