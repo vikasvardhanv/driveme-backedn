@@ -72,7 +72,8 @@ export class AzugaService {
 
   // Azuga API configuration
   private readonly azugaApiKey = process.env.AZUGA_API_KEY;
-  private readonly azugaBaseUrl = process.env.AZUGA_BASE_URL || 'https://fleet.azuga.com';
+  // Updated to correct API host based on documentation
+  private readonly azugaBaseUrl = process.env.AZUGA_BASE_URL || 'https://services.azuga.com';
 
   constructor(
     private prisma: PrismaService,
@@ -111,15 +112,15 @@ export class AzugaService {
     try {
       const authHeader = `Basic ${Buffer.from(this.azugaApiKey).toString('base64')}`;
 
+      // Changed to GET based on 405 Method Not Allowed error
       const response = await fetch(
-        `${this.azugaBaseUrl}/azuga-ws-oauth/v3/users.json?userType=driver&limit=100`,
+        `${this.azugaBaseUrl}/azuga-ws-oauth/v3/users.json?userType=driver&limit=100&offset=0`,
         {
-          method: 'POST',
+          method: 'GET',
           headers: {
             'Authorization': authHeader,
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify({ limit: 100, offset: 0 }),
         }
       );
 
