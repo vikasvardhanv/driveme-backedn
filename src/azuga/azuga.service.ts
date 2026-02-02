@@ -110,13 +110,15 @@ export class AzugaService {
     }
 
     try {
-      // Standard Basic Auth expects "username:password". 
-      // For API Key only, it's usually "apikey:" (key as username, empty password)
-      const authHeader = `Basic ${Buffer.from(`${this.azugaApiKey}:`).toString('base64')}`;
+      // Reverting to raw key encoding (no colon) for debugging
+      const authHeader = `Basic ${Buffer.from(this.azugaApiKey).toString('base64')}`;
 
-      // Search results confirm POST for /users.json with query params
+      const endpoint = `${this.azugaBaseUrl}/azuga-ws-oauth/v3/users.json?userType=driver`;
+      this.logger.log(`Azuga Auth Debug: KeyLoaded=${!!this.azugaApiKey}, KeyLen=${this.azugaApiKey?.length}, Header=${authHeader.substring(0, 15)}...`);
+      this.logger.log(`Fetching Drivers from: ${endpoint} [POST]`);
+
       const response = await fetch(
-        `${this.azugaBaseUrl}/azuga-ws-oauth/v3/users.json?userType=driver`,
+        endpoint,
         {
           method: 'POST',
           headers: {
@@ -438,11 +440,15 @@ export class AzugaService {
     }
 
     try {
-      const authHeader = `Basic ${Buffer.from(`${this.azugaApiKey}:`).toString('base64')}`;
+      // Reverting to raw key encoding (no colon)
+      const authHeader = `Basic ${Buffer.from(this.azugaApiKey).toString('base64')}`;
+
+      const endpoint = `${this.azugaBaseUrl}/azuga-ws-oauth/v3/trackees`;
+      this.logger.log(`Fetching Vehicles from: ${endpoint} [POST]`);
 
       // Documentation indicates POST /trackees is the correct endpoint for "View All Vehicles"
       const response = await fetch(
-        `${this.azugaBaseUrl}/azuga-ws-oauth/v3/trackees`,
+        endpoint,
         {
           method: 'POST',
           headers: {
