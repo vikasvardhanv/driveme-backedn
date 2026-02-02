@@ -24,9 +24,21 @@ export class AzugaController {
         return this.azugaService.getCachedVehicles();
     }
 
-    @Get('drivers')
-    getDrivers(): CachedDriver[] {
-        return this.azugaService.getCachedDrivers();
+    async getDrivers(): Promise<CachedDriver[]> {
+        const cachedDrivers = this.azugaService.getCachedDrivers();
+
+        if (cachedDrivers.length === 0) {
+            this.logger.log('Cache empty, fetching drivers explicitly...');
+            try {
+                await this.azugaService.syncDriversFromAzuga();
+                return this.azugaService.getCachedDrivers();
+            } catch (error) {
+                this.logger.error('Failed to auto-fetch drivers', error);
+                return [];
+            }
+        }
+
+        return cachedDrivers;
     }
 
     /**
