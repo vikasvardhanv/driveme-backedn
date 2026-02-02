@@ -443,20 +443,19 @@ export class AzugaService {
       // Reverting to raw key encoding (no colon)
       const authHeader = `Basic ${Buffer.from(this.azugaApiKey).toString('base64')}`;
 
-      const endpoint = `${this.azugaBaseUrl}/azuga-ws-oauth/v3/trackees`;
-      this.logger.log(`Fetching Vehicles from: ${endpoint} [POST]`);
+      // Switching to V1 Legacy Endpoint (GET for vehicles)
+      const endpoint = `https://api.azuga.com/azuga-ws/v1/vehicles.json`;
+      this.logger.log(`Fetching Vehicles from: ${endpoint} [GET]`);
 
-      // Documentation indicates POST /trackees is the correct endpoint for "View All Vehicles"
+      // Documentation indicates GET /vehicles.json for legacy API
       const response = await fetch(
         endpoint,
         {
-          method: 'POST',
+          method: 'GET',
           headers: {
             'Authorization': authHeader,
             'Content-Type': 'application/json',
           },
-          // trackees endpoint might accept pagination in body
-          body: JSON.stringify({ page: 1, pageSize: 100 }),
         }
       );
 
