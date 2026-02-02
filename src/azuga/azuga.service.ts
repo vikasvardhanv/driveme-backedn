@@ -110,7 +110,9 @@ export class AzugaService {
     }
 
     try {
-      const authHeader = `Basic ${Buffer.from(this.azugaApiKey).toString('base64')}`;
+      // Standard Basic Auth expects "username:password". 
+      // For API Key only, it's usually "apikey:" (key as username, empty password)
+      const authHeader = `Basic ${Buffer.from(`${this.azugaApiKey}:`).toString('base64')}`;
 
       // Changed to GET based on 405 Method Not Allowed error
       const response = await fetch(
@@ -435,7 +437,7 @@ export class AzugaService {
     }
 
     try {
-      const authHeader = `Basic ${Buffer.from(this.azugaApiKey).toString('base64')}`;
+      const authHeader = `Basic ${Buffer.from(`${this.azugaApiKey}:`).toString('base64')}`;
 
       // Try vehicles endpoint
       const response = await fetch(
