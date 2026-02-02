@@ -113,8 +113,8 @@ export class AzugaService {
       // Reverting to raw key encoding (no colon) for debugging
       const authHeader = `Basic ${Buffer.from(this.azugaApiKey).toString('base64')}`;
 
-      // Moving params to Query String as body POST failed with 400, but URL params triggered 429 (Auth success)
-      const endpoint = `https://api.azuga.com/azuga-ws/v1/users.json?userType=driver&limit=100&page=1`;
+      // SDK uses: limit, offset, userType as query params
+      const endpoint = `https://api.azuga.com/azuga-ws/v1/users.json?userType=driver&limit=100&offset=0`;
       this.logger.log(`Azuga Auth Debug: KeyLoaded=${!!this.azugaApiKey}, KeyLen=${this.azugaApiKey?.length}, Header=${authHeader.substring(0, 15)}...`);
       this.logger.log(`Fetching Drivers from: ${endpoint} [POST]`);
 
@@ -126,7 +126,7 @@ export class AzugaService {
             'Authorization': authHeader,
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify({}), // Explicit empty body
+          // SDK sends empty object as first arg
         }
       );
 
@@ -444,15 +444,14 @@ export class AzugaService {
       // Reverting to raw key encoding (no colon)
       const authHeader = `Basic ${Buffer.from(this.azugaApiKey).toString('base64')}`;
 
-      // Switching to V1 Legacy Endpoint (GET for vehicles)
+      // V1 vehicles endpoint also uses POST (405 on GET)
       const endpoint = `https://api.azuga.com/azuga-ws/v1/vehicles.json`;
-      this.logger.log(`Fetching Vehicles from: ${endpoint} [GET]`);
+      this.logger.log(`Fetching Vehicles from: ${endpoint} [POST]`);
 
-      // Documentation indicates GET /vehicles.json for legacy API
       const response = await fetch(
         endpoint,
         {
-          method: 'GET',
+          method: 'POST',
           headers: {
             'Authorization': authHeader,
             'Content-Type': 'application/json',
