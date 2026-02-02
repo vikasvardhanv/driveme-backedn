@@ -425,4 +425,136 @@ export class AzugaService {
       this.logger.debug(`DB update skipped for ${vehicleId}`);
     }
   }
+  /**
+   * Fetch vehicles from Azuga API
+   */
+  async fetchVehiclesFromApi(): Promise<any[]> {
+    if (!this.azugaApiKey) {
+      throw new Error('AZUGA_API_KEY environment variable is not configured');
+    }
+
+    try {
+      const authHeader = `Basic ${Buffer.from(this.azugaApiKey).toString('base64')}`;
+
+      // Try vehicles endpoint
+      const response = await fetch(
+        `${this.azugaBaseUrl}/azuga-ws-oauth/v3/vehicles.json`,
+        {
+          method: 'GET', // Usually GET for vehicles list
+          headers: {
+            'Authorization': authHeader,
+            'Content-Type': 'application/json',
+          },
+        }
+      );
+
+      if (!response.ok) {
+        throw new Error(`Azuga API error: ${response.status} ${response.statusText}`);
+      }
+
+      const data = await response.json();
+      this.logger.log(`Fetched ${data.length || 0} vehicles from Azuga API`);
+
+      // Handle response formats
+      if (Array.isArray(data)) {
+        return data;
+      } else if (data.vehicles && Array.isArray(data.vehicles)) {
+        return data.vehicles;
+      } else if (data.data && Array.isArray(data.data)) {
+        return data.data;
+      }
+
+      return [];
+    } catch (error) {
+      this.logger.error('Failed to fetch vehicles from Azuga API', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Sync vehicles from Azuga API to database
+   */
+  async syncVehiclesFromAzuga(): Promise<DriverSyncResult> {
+    const result: DriverSyncResult = {
+      synced: 0,
+      created: 0,
+      updated: 0,
+      errors: [],
+      lastSyncAt: new Date().toISOString(),
+    };
+
+    try {
+      const azugaVehicles = await this.fetchVehiclesFromApi();
+
+      for (const vehicle of azugaVehicles) {
+        try {
+          const vin = vehicle.vin || vehicle.deviceSerial || vehicle.serialNumber;
+          const licensePlate = vehicle.licensePlate || vehicle.vehicleName || vehicle.name;
+
+          if (!vin || !licensePlate) {
+            // Skip if essential identifiers are missing
+            continue;
+          }
+
+          const make = vehicle.make || 'Unknown';
+          const model = vehicle.model || 'Unknown';
+          const year = parseInt(vehicle.year) || 2020; // Default year if missing
+
+          // Check if vehicle exists
+          const existingVehicle = await this.prisma.vehicle.findUnique({
+            where: { vin },
+          });
+
+          if (existingVehicle) {
+            // Update
+            await this.prisma.vehicle.update({
+              where: { id: existingVehicle.id },
+              data: {
+                make,
+                model,
+                year,
+                licensePlate, // Ideally we shouldn't change unique fields easily, but if it changed in Azuga..
+                currentSpeed: vehicle.speed ? parseFloat(vehicle.speed) : undefined,
+                updatedAt: new Date(),
+              }
+            });
+            result.updated++;
+          } else {
+            // Create
+            // Need to handle licensePlate uniqueness too
+            const existingPlate = await this.prisma.vehicle.findUnique({ where: { licensePlate } });
+            if (existingPlate) {
+              // If VIN is new but plate exists, maybe skip or update that one? 
+              // For now, assume data integrity issue and skip or log
+              this.logger.warn(`Vehicle creation conflict: License plate ${licensePlate} already exists for another VIN`);
+              continue;
+            }
+
+            await this.prisma.vehicle.create({
+              data: {
+                make,
+                model,
+                year,
+                licensePlate,
+                vin,
+                isActive: true,
+                vehicleType: 'Taxi', // Default
+              }
+            });
+            result.created++;
+          }
+          result.synced++;
+
+        } catch (vError) {
+          result.errors.push(`Failed to sync vehicle ${vehicle.vehicleName}: ${vError.message}`);
+        }
+      }
+
+      return result;
+    } catch (error) {
+      this.logger.error('Vehicle sync failed', error);
+      result.errors.push(error.message);
+      return result;
+    }
+  }
 }
