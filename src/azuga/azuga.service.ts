@@ -1,6 +1,9 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { TrackingGateway } from '../tracking/tracking.gateway';
+import { EmailService } from '../email/email.service';
+import * as bcrypt from 'bcrypt';
 
 export interface CachedVehicle {
   id: string;
@@ -32,6 +35,30 @@ export interface CachedDriver {
   isActive: boolean;
 }
 
+export interface AzugaApiDriver {
+  id: string;
+  firstName: string;
+  lastName: string;
+  email: string;
+  primaryContactNumber?: string;
+  alternateContactNumber?: string;
+  roleId?: string;
+  userName?: string;
+  licenseNumber?: string;
+  licenseIssuedDate?: string;
+  licenseExpiry?: string;
+  licenseIssuedState?: string;
+  fullName?: string;
+}
+
+export interface DriverSyncResult {
+  synced: number;
+  created: number;
+  updated: number;
+  errors: string[];
+  lastSyncAt: string;
+}
+
 @Injectable()
 export class AzugaService {
   private readonly logger = new Logger(AzugaService.name);
@@ -40,11 +67,215 @@ export class AzugaService {
   private vehicleCache: Map<string, CachedVehicle> = new Map();
   // In-memory cache of driver data
   private driverCache: Map<string, CachedDriver> = new Map();
+  // Last sync result
+  private lastSyncResult: DriverSyncResult | null = null;
+
+  // Azuga API configuration
+  private readonly azugaApiKey = process.env.AZUGA_API_KEY;
+  private readonly azugaBaseUrl = process.env.AZUGA_BASE_URL || 'https://fleet.azuga.com';
 
   constructor(
     private prisma: PrismaService,
-    private trackingGateway: TrackingGateway
-  ) {}
+    private trackingGateway: TrackingGateway,
+    private emailService: EmailService,
+  ) { }
+
+  /**
+   * Get the last sync result
+   */
+  getLastSyncResult(): DriverSyncResult | null {
+    return this.lastSyncResult;
+  }
+
+  /**
+   * Scheduled job to sync drivers every 30 minutes
+   */
+  @Cron(CronExpression.EVERY_30_MINUTES)
+  async scheduledDriverSync() {
+    if (!this.azugaApiKey) {
+      this.logger.warn('AZUGA_API_KEY not configured, skipping scheduled sync');
+      return;
+    }
+    this.logger.log('Running scheduled Azuga driver sync...');
+    await this.syncDriversFromAzuga();
+  }
+
+  /**
+   * Fetch drivers from Azuga API
+   */
+  async fetchDriversFromApi(): Promise<AzugaApiDriver[]> {
+    if (!this.azugaApiKey) {
+      throw new Error('AZUGA_API_KEY environment variable is not configured');
+    }
+
+    try {
+      const authHeader = `Basic ${Buffer.from(this.azugaApiKey).toString('base64')}`;
+
+      const response = await fetch(
+        `${this.azugaBaseUrl}/azuga-ws-oauth/v3/users.json?userType=driver&limit=100`,
+        {
+          method: 'POST',
+          headers: {
+            'Authorization': authHeader,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ limit: 100, offset: 0 }),
+        }
+      );
+
+      if (!response.ok) {
+        throw new Error(`Azuga API error: ${response.status} ${response.statusText}`);
+      }
+
+      const data = await response.json();
+      this.logger.log(`Fetched ${data.length || 0} drivers from Azuga API`);
+
+      // Handle different response formats
+      if (Array.isArray(data)) {
+        return data;
+      } else if (data.users && Array.isArray(data.users)) {
+        return data.users;
+      } else if (data.data && Array.isArray(data.data)) {
+        return data.data;
+      }
+
+      return [];
+    } catch (error) {
+      this.logger.error('Failed to fetch drivers from Azuga API', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Generate a random temporary password
+   */
+  private generateTempPassword(): string {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
+    let password = '';
+    for (let i = 0; i < 10; i++) {
+      password += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return password;
+  }
+
+  /**
+   * Sync drivers from Azuga API to database and send welcome emails
+   */
+  async syncDriversFromAzuga(): Promise<DriverSyncResult> {
+    const result: DriverSyncResult = {
+      synced: 0,
+      created: 0,
+      updated: 0,
+      errors: [],
+      lastSyncAt: new Date().toISOString(),
+    };
+
+    try {
+      const azugaDrivers = await this.fetchDriversFromApi();
+
+      for (const azugaDriver of azugaDrivers) {
+        try {
+          const email = azugaDriver.email?.toLowerCase().trim();
+          if (!email) {
+            result.errors.push(`Driver ${azugaDriver.firstName} ${azugaDriver.lastName} has no email, skipped`);
+            continue;
+          }
+
+          // Check if user already exists
+          const existingUser = await this.prisma.user.findUnique({
+            where: { email },
+          });
+
+          if (existingUser) {
+            // Update existing user with Azuga data
+            await this.prisma.user.update({
+              where: { id: existingUser.id },
+              data: {
+                firstName: azugaDriver.firstName || existingUser.firstName,
+                lastName: azugaDriver.lastName || existingUser.lastName,
+                phone: azugaDriver.primaryContactNumber || existingUser.phone,
+                licenseNumber: azugaDriver.licenseNumber || existingUser.licenseNumber,
+                licenseExpiry: azugaDriver.licenseExpiry
+                  ? new Date(azugaDriver.licenseExpiry)
+                  : existingUser.licenseExpiry,
+                isActive: true,
+              },
+            });
+            result.updated++;
+
+            // Also cache the driver
+            this.cacheDriverFromAzuga(azugaDriver);
+          } else {
+            // Create new user
+            const tempPassword = this.generateTempPassword();
+            const hashedPassword = await bcrypt.hash(tempPassword, 10);
+
+            await this.prisma.user.create({
+              data: {
+                email,
+                password: hashedPassword,
+                firstName: azugaDriver.firstName || 'Driver',
+                lastName: azugaDriver.lastName || '',
+                phone: azugaDriver.primaryContactNumber || null,
+                role: 'DRIVER',
+                licenseNumber: azugaDriver.licenseNumber || null,
+                licenseExpiry: azugaDriver.licenseExpiry
+                  ? new Date(azugaDriver.licenseExpiry)
+                  : null,
+                isActive: true,
+              },
+            });
+            result.created++;
+
+            // Send welcome email with credentials
+            const fullName = `${azugaDriver.firstName || ''} ${azugaDriver.lastName || ''}`.trim() || 'Driver';
+            await this.emailService.sendDriverWelcomeEmail(email, fullName, tempPassword);
+            this.logger.log(`Created driver account and sent welcome email to ${email}`);
+
+            // Cache the driver
+            this.cacheDriverFromAzuga(azugaDriver);
+          }
+
+          result.synced++;
+        } catch (driverError) {
+          const errorMsg = `Failed to sync driver ${azugaDriver.email}: ${driverError.message}`;
+          this.logger.error(errorMsg);
+          result.errors.push(errorMsg);
+        }
+      }
+
+      this.lastSyncResult = result;
+      this.logger.log(`Driver sync complete: ${result.created} created, ${result.updated} updated, ${result.errors.length} errors`);
+
+      // Broadcast update to connected clients
+      this.trackingGateway.server.emit('drivers:synced', result);
+
+      return result;
+    } catch (error) {
+      result.errors.push(`Sync failed: ${error.message}`);
+      this.lastSyncResult = result;
+      throw error;
+    }
+  }
+
+  /**
+   * Cache driver from Azuga API response
+   */
+  private cacheDriverFromAzuga(azugaDriver: AzugaApiDriver) {
+    const cachedDriver: CachedDriver = {
+      id: azugaDriver.id,
+      name: `${azugaDriver.firstName || ''} ${azugaDriver.lastName || ''}`.trim(),
+      email: azugaDriver.email || null,
+      phone: azugaDriver.primaryContactNumber || null,
+      vehicleId: null,
+      vehicleName: null,
+      role: 'Driver',
+      timezone: null,
+      externalId: azugaDriver.id,
+      isActive: true,
+    };
+    this.driverCache.set(azugaDriver.id, cachedDriver);
+  }
 
   /**
    * Get all cached driver data
@@ -84,9 +315,9 @@ export class AzugaService {
     try {
       // Handle array of events
       const events = Array.isArray(payload) ? payload :
-                     payload.events ? payload.events :
-                     payload.data ? (Array.isArray(payload.data) ? payload.data : [payload.data]) :
-                     [payload];
+        payload.events ? payload.events :
+          payload.data ? (Array.isArray(payload.data) ? payload.data : [payload.data]) :
+            [payload];
 
       for (const event of events) {
         await this.processVehicleEvent(event);
@@ -113,17 +344,17 @@ export class AzugaService {
     // Extract other info
     const vehicleName = event.vehicleName || event.name || event.assetName || vehicleId;
     const driverName = event.driverName || event.driver?.name || event.driverFirstName ?
-                       `${event.driverFirstName || ''} ${event.driverLastName || ''}`.trim() : null;
+      `${event.driverFirstName || ''} ${event.driverLastName || ''}`.trim() : null;
     const address = event.address || event.location || event.streetAddress || null;
     const ignitionStatus = event.ignitionStatus || event.ignition ||
-                          (event.eventType === 'IGNITION_ON' ? 'Ignition On' :
-                           event.eventType === 'IGNITION_OFF' ? 'Ignition Off' :
-                           speed > 0 ? 'Ignition On' : 'Ignition Off');
+      (event.eventType === 'IGNITION_ON' ? 'Ignition On' :
+        event.eventType === 'IGNITION_OFF' ? 'Ignition Off' :
+          speed > 0 ? 'Ignition On' : 'Ignition Off');
 
     // Determine status
     const isMoving = speed > 2;
     const status: 'moving' | 'idle' | 'offline' = isMoving ? 'moving' :
-                  ignitionStatus.toLowerCase().includes('on') ? 'idle' : 'offline';
+      ignitionStatus.toLowerCase().includes('on') ? 'idle' : 'offline';
 
     // Cache the vehicle data
     const cachedVehicle: CachedVehicle = {

@@ -1,5 +1,5 @@
 import { Body, Controller, Get, Logger, Post } from '@nestjs/common';
-import { AzugaService, CachedVehicle, CachedDriver } from './azuga.service';
+import { AzugaService, CachedVehicle, CachedDriver, DriverSyncResult } from './azuga.service';
 
 @Controller('azuga')
 export class AzugaController {
@@ -27,5 +27,28 @@ export class AzugaController {
     @Get('drivers')
     getDrivers(): CachedDriver[] {
         return this.azugaService.getCachedDrivers();
+    }
+
+    /**
+     * Manually trigger driver sync from Azuga API
+     */
+    @Post('sync-drivers')
+    async syncDrivers(): Promise<DriverSyncResult> {
+        this.logger.log('Manual driver sync triggered');
+        return this.azugaService.syncDriversFromAzuga();
+    }
+
+    /**
+     * Get the status of the last driver sync
+     */
+    @Get('sync-status')
+    getSyncStatus(): { lastSync: DriverSyncResult | null; message: string } {
+        const lastSync = this.azugaService.getLastSyncResult();
+        return {
+            lastSync,
+            message: lastSync
+                ? `Last sync at ${lastSync.lastSyncAt}: ${lastSync.created} created, ${lastSync.updated} updated`
+                : 'No sync has been performed yet',
+        };
     }
 }

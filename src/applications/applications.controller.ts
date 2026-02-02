@@ -1,5 +1,6 @@
 
-import { Controller, Get, Post, Body, Param } from '@nestjs/common';
+import { Controller, Get, Post, Body, Param, UseInterceptors, UploadedFile } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { ApplicationsService } from './applications.service';
 import { DriverApplication } from '@prisma/client';
 
@@ -8,8 +9,12 @@ export class ApplicationsController {
     constructor(private readonly applicationsService: ApplicationsService) { }
 
     @Post()
-    create(@Body() createApplicationDto: { name: string; pdfUrl: string, email?: string, phone?: string }) {
-        return this.applicationsService.create(createApplicationDto);
+    @UseInterceptors(FileInterceptor('file'))
+    create(
+        @UploadedFile() file: Express.Multer.File,
+        @Body() body: { name: string; email?: string; phone?: string }
+    ) {
+        return this.applicationsService.create(body, file);
     }
 
     @Get()
