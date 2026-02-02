@@ -114,15 +114,16 @@ export class AzugaService {
       // For API Key only, it's usually "apikey:" (key as username, empty password)
       const authHeader = `Basic ${Buffer.from(`${this.azugaApiKey}:`).toString('base64')}`;
 
-      // Changed to GET based on 405 Method Not Allowed error
+      // Search results confirm POST for /users.json with query params
       const response = await fetch(
-        `${this.azugaBaseUrl}/azuga-ws-oauth/v3/users.json?userType=driver&limit=100&offset=0`,
+        `${this.azugaBaseUrl}/azuga-ws-oauth/v3/users.json?userType=driver`,
         {
-          method: 'GET',
+          method: 'POST',
           headers: {
             'Authorization': authHeader,
             'Content-Type': 'application/json',
           },
+          body: JSON.stringify({ limit: 100, offset: 0 }),
         }
       );
 
@@ -439,15 +440,17 @@ export class AzugaService {
     try {
       const authHeader = `Basic ${Buffer.from(`${this.azugaApiKey}:`).toString('base64')}`;
 
-      // Try vehicles endpoint
+      // Documentation indicates POST /trackees is the correct endpoint for "View All Vehicles"
       const response = await fetch(
-        `${this.azugaBaseUrl}/azuga-ws-oauth/v3/vehicles.json`,
+        `${this.azugaBaseUrl}/azuga-ws-oauth/v3/trackees`,
         {
-          method: 'GET', // Usually GET for vehicles list
+          method: 'POST',
           headers: {
             'Authorization': authHeader,
             'Content-Type': 'application/json',
           },
+          // trackees endpoint might accept pagination in body
+          body: JSON.stringify({ page: 1, pageSize: 100 }),
         }
       );
 
