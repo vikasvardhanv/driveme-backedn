@@ -764,57 +764,38 @@ export class AzugaService {
     // For now, just log them
   }
 
-  /**
-   * Fetch vehicles from Azuga API
-   */
   async fetchVehiclesFromApi(): Promise<any[]> {
     try {
       const token = await this.authenticate();
 
-      // V1 vehicles endpoint also uses POST (405 on GET) - Validation showed GET + cid works
-      const endpoint = `${this.azugaBaseUrl}/vehicles.json`;
+      // V3 Endpoint for Vehicles (Trackees)
+      // Endpoint: POST /trackees
+      const endpoint = `${this.azugaBaseUrl}/trackees`;
       this.logger.log(`Fetching Vehicles from: ${endpoint}`);
 
-      // explicit cast to avoid TS lint
-      const headers: Record<string, string> = {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-        'cid': this.clientId || '',
-      };
-
       const response = await fetch(endpoint, {
-        method: 'GET',
-        headers,
+        method: 'POST', // V3 uses POST
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+        },
+        body: JSON.stringify({}), // V3 requires empty body
       });
 
       if (!response.ok) {
+        if (response.status === 401) {
+          this.accessToken = null;
+        }
         throw new Error(`Azuga API error: ${response.status} ${response.statusText}`);
       }
 
-      const text = await response.text();
-      let data: any = [];
-      if (text && text.length > 0) {
-        try {
-          data = JSON.parse(text);
-        } catch (e) {
-          this.logger.warn(`Failed to parse vehicle response JSON: ${text.substring(0, 100)}...`);
-        }
-      }
-      this.logger.log(`Fetched ${Array.isArray(data) ? data.length : 'unknown'} vehicles from Azuga API`);
+      const body = await response.json();
+      // V3 structure: { generatedAtInMillis: number, data: [...] }
+      const vehicles = body.data || [];
 
-      // Handle response formats
-      if (Array.isArray(data)) {
-        return data;
-      } else if (data.data && Array.isArray(data.data)) {
-        return data.data;
-      } else if (data.vehicles && Array.isArray(data.vehicles)) {
-        return data.vehicles;
-      }
-
-      return [];
-
-      return [];
+      this.logger.log(`Fetched ${vehicles.length} vehicles from Azuga API`);
+      return vehicles;
     } catch (error) {
       this.logger.error('Failed to fetch vehicles from Azuga API', error);
       throw error;
