@@ -12,6 +12,7 @@ import { AuthModule } from './auth/auth.module';
 import { TripsModule } from './trips/trips.module';
 import { VehiclesModule } from './vehicles/vehicles.module';
 import { ApplicationsModule } from './applications/applications.module';
+import { UsersModule } from './users/users.module';
 
 @Module({
   imports: [
@@ -25,7 +26,8 @@ import { ApplicationsModule } from './applications/applications.module';
     AuthModule,
     TripsModule,
     VehiclesModule,
-    ApplicationsModule
+    ApplicationsModule,
+    UsersModule
   ],
   controllers: [AppController],
   providers: [AppService],

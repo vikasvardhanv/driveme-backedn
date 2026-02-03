@@ -71,9 +71,14 @@ export class AzugaService {
   private lastSyncResult: DriverSyncResult | null = null;
 
   // Azuga API configuration
-  private readonly azugaApiKey = process.env.AZUGA_API_KEY;
-  // Updated to correct API host based on documentation
-  private readonly azugaBaseUrl = process.env.AZUGA_BASE_URL || 'https://services.azuga.com';
+  private readonly clientId = process.env.AZUGA_CLIENT_ID;
+  private readonly apiUsername = process.env.AZUGA_USERNAME;
+  private readonly apiPassword = process.env.AZUGA_PASSWORD;
+  private readonly azugaBaseUrl = process.env.AZUGA_BASE_URL || 'https://api.azuga.com/azuga-ws/v1';
+
+  // Auth Token State
+  private accessToken: string | null = null;
+  private tokenExpiresAt: number | null = null; // Timestamp in ms
 
   constructor(
     private prisma: PrismaService,
@@ -93,8 +98,8 @@ export class AzugaService {
    */
   @Cron(CronExpression.EVERY_30_MINUTES)
   async scheduledDriverSync() {
-    if (!this.azugaApiKey) {
-      this.logger.warn('AZUGA_API_KEY not configured, skipping scheduled sync');
+    if (!this.clientId || !this.apiUsername || !this.apiPassword) {
+      this.logger.warn('Azuga Credentials (CLIENT_ID, USERNAME, PASSWORD) not fully configured, skipping scheduled sync');
       return;
     }
     this.logger.log('Running scheduled Azuga driver sync...');
@@ -102,35 +107,87 @@ export class AzugaService {
   }
 
   /**
-   * Fetch drivers from Azuga API
+   * Authenticate with Azuga API to get JWT
    */
-  async fetchDriversFromApi(): Promise<AzugaApiDriver[]> {
-    if (!this.azugaApiKey) {
-      throw new Error('AZUGA_API_KEY environment variable is not configured');
+  async authenticate(): Promise<string> {
+    // Check if current token is valid (with 5 min buffer)
+    if (this.accessToken && this.tokenExpiresAt && Date.now() < this.tokenExpiresAt - 300000) {
+      return this.accessToken;
+    }
+
+    this.logger.log('Authenticating with Azuga API...');
+
+    if (!this.clientId || !this.apiUsername || !this.apiPassword) {
+      throw new Error('Azuga Credentials not configured');
     }
 
     try {
-      // Reverting to raw key encoding (no colon) for debugging
-      const authHeader = `Basic ${Buffer.from(this.azugaApiKey).toString('base64')}`;
+      // Use the specific Auth URL provided
+      const endpoint = 'https://auth.azuga.com/azuga-as/oauth2/login/oauthtoken.json?loginType=1';
 
-      // SDK uses: limit, offset, userType as query params
-      const endpoint = `https://api.azuga.com/azuga-ws/v1/users.json?userType=driver&limit=100&offset=0`;
-      this.logger.log(`Azuga Auth Debug: KeyLoaded=${!!this.azugaApiKey}, KeyLen=${this.azugaApiKey?.length}, Header=${authHeader.substring(0, 15)}...`);
-      this.logger.log(`Fetching Drivers from: ${endpoint} [POST]`);
+      const payload = {
+        clientId: this.clientId,
+        userName: this.apiUsername,
+        password: this.apiPassword
+      };
 
-      const response = await fetch(
-        endpoint,
-        {
-          method: 'POST',
-          headers: {
-            'Authorization': authHeader,
-            'Content-Type': 'application/json',
-          },
-          // SDK sends empty object as first arg
-        }
-      );
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
 
       if (!response.ok) {
+        throw new Error(`Azuga Auth Failed: ${response.status} ${response.statusText}`);
+      }
+
+      const body = await response.json();
+      // Expecting { data: { access_token: "...", expires_in: 15552000, ... } }
+      const data = body.data || body;
+
+      if (!data.access_token) {
+        throw new Error('No access_token received from Azuga');
+      }
+
+      this.accessToken = data.access_token;
+      // expires_in is usually in seconds
+      const expiresInSec = data.expires_in || 3600;
+      this.tokenExpiresAt = Date.now() + (expiresInSec * 1000);
+
+      this.logger.log(`Azuga Auth Successful. Token expires in ${expiresInSec}s`);
+
+      return this.accessToken as string;
+    } catch (error) {
+      this.logger.error('Azuga Authentication Error', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Fetch drivers from Azuga API
+   */
+  async fetchDriversFromApi(): Promise<AzugaApiDriver[]> {
+    try {
+      const token = await this.authenticate();
+
+      // SDK uses: limit, offset, userType as query params
+      // Using verified endpoint from older code with JWT authentication
+      const endpoint = `${this.azugaBaseUrl}/users.json?userType=driver&limit=100&offset=0`;
+      this.logger.log(`Fetching Drivers from: ${endpoint}`);
+
+      const response = await fetch(endpoint, {
+        method: 'POST', // API docs say POST for retrieval sometimes, checking context... old code used POST
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (!response.ok) {
+        if (response.status === 401) {
+          // Token might be invalid despite check, force refresh next time?
+          this.accessToken = null;
+        }
         throw new Error(`Azuga API error: ${response.status} ${response.statusText}`);
       }
 
@@ -184,6 +241,8 @@ export class AzugaService {
         try {
           const email = azugaDriver.email?.toLowerCase().trim();
           if (!email) {
+            // Some drivers might not have email, try username or skip
+            // If strictly creating users, we need email unique
             result.errors.push(`Driver ${azugaDriver.firstName} ${azugaDriver.lastName} has no email, skipped`);
             continue;
           }
@@ -205,7 +264,7 @@ export class AzugaService {
                 licenseExpiry: azugaDriver.licenseExpiry
                   ? new Date(azugaDriver.licenseExpiry)
                   : existingUser.licenseExpiry,
-                isActive: true,
+                isActive: true, // Reactivate if found in Azuga
               },
             });
             result.updated++;
@@ -327,7 +386,10 @@ export class AzugaService {
             [payload];
 
       for (const event of events) {
+        // Safe access to event type
         const eventType = event.eventType || event.event_type || event.type;
+        if (!eventType) continue;
+
         this.logger.log(`Processing Azuga event: ${eventType}`);
 
         // Process different event types
@@ -449,7 +511,7 @@ export class AzugaService {
       if (dbVehicle) {
         // Extract odometer data from webhook (Azuga sends this in various formats)
         const odometer = event.odometer || event.odometerReading || event.currentOdometer ||
-                        event.totalDistance || event.mileage;
+          event.totalDistance || event.mileage;
 
         const updateData: any = {
           currentLat: latitude,
@@ -711,28 +773,20 @@ export class AzugaService {
    * Fetch vehicles from Azuga API
    */
   async fetchVehiclesFromApi(): Promise<any[]> {
-    if (!this.azugaApiKey) {
-      throw new Error('AZUGA_API_KEY environment variable is not configured');
-    }
-
     try {
-      // Reverting to raw key encoding (no colon)
-      const authHeader = `Basic ${Buffer.from(this.azugaApiKey).toString('base64')}`;
+      const token = await this.authenticate();
 
       // V1 vehicles endpoint also uses POST (405 on GET)
-      const endpoint = `https://api.azuga.com/azuga-ws/v1/vehicles.json`;
-      this.logger.log(`Fetching Vehicles from: ${endpoint} [POST]`);
+      const endpoint = `${this.azugaBaseUrl}/vehicles.json`;
+      this.logger.log(`Fetching Vehicles from: ${endpoint}`);
 
-      const response = await fetch(
-        endpoint,
-        {
-          method: 'POST',
-          headers: {
-            'Authorization': authHeader,
-            'Content-Type': 'application/json',
-          },
-        }
-      );
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+      });
 
       if (!response.ok) {
         throw new Error(`Azuga API error: ${response.status} ${response.statusText}`);
