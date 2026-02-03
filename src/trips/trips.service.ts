@@ -104,88 +104,104 @@ export class TripsService {
   }
 
   async update(id: string, updateTripDto: UpdateTripDto) {
-    // Build update data carefully to avoid type issues
-    const updateData: Prisma.TripUpdateInput = {};
+    try {
+      this.logger.log(`Updating trip ${id}: ${JSON.stringify(updateTripDto)}`);
 
-    if (updateTripDto.pickupAddress !== undefined) updateData.pickupAddress = updateTripDto.pickupAddress;
-    if (updateTripDto.pickupLat !== undefined) updateData.pickupLat = updateTripDto.pickupLat;
-    if (updateTripDto.pickupLng !== undefined) updateData.pickupLng = updateTripDto.pickupLng;
-    if (updateTripDto.dropoffAddress !== undefined) updateData.dropoffAddress = updateTripDto.dropoffAddress;
-    if (updateTripDto.dropoffLat !== undefined) updateData.dropoffLat = updateTripDto.dropoffLat;
-    if (updateTripDto.dropoffLng !== undefined) updateData.dropoffLng = updateTripDto.dropoffLng;
-    if (updateTripDto.customerName !== undefined) updateData.customerName = updateTripDto.customerName;
-    if (updateTripDto.customerPhone !== undefined) updateData.customerPhone = updateTripDto.customerPhone;
-    if (updateTripDto.customerEmail !== undefined) updateData.customerEmail = updateTripDto.customerEmail;
-    if (updateTripDto.notes !== undefined) updateData.notes = updateTripDto.notes;
-    if (updateTripDto.tripType !== undefined) updateData.tripType = updateTripDto.tripType;
-    if (updateTripDto.status !== undefined) updateData.status = updateTripDto.status as any;
-    if (updateTripDto.pickupOdometer !== undefined) updateData.pickupOdometer = updateTripDto.pickupOdometer;
-    if (updateTripDto.dropoffOdometer !== undefined) updateData.dropoffOdometer = updateTripDto.dropoffOdometer;
-    if (updateTripDto.reasonForVisit !== undefined) updateData.reasonForVisit = updateTripDto.reasonForVisit;
-    if (updateTripDto.escortName !== undefined) updateData.escortName = updateTripDto.escortName;
-    if (updateTripDto.escortRelationship !== undefined) updateData.escortRelationship = updateTripDto.escortRelationship;
+      // Build update data carefully to avoid type issues
+      const updateData: Prisma.TripUpdateInput = {};
 
-    if (updateTripDto.memberId) {
-      updateData.member = { connect: { id: updateTripDto.memberId } };
-    }
-    if (updateTripDto.companyId) {
-      updateData.company = { connect: { id: updateTripDto.companyId } };
-    }
-    if (updateTripDto.driverId) {
-      updateData.driver = { connect: { id: updateTripDto.driverId } };
-    }
-    if (updateTripDto.vehicleId) {
-      updateData.vehicle = { connect: { id: updateTripDto.vehicleId } };
-    }
+      if (updateTripDto.pickupAddress !== undefined) updateData.pickupAddress = updateTripDto.pickupAddress;
+      if (updateTripDto.pickupLat !== undefined) updateData.pickupLat = updateTripDto.pickupLat;
+      if (updateTripDto.pickupLng !== undefined) updateData.pickupLng = updateTripDto.pickupLng;
+      if (updateTripDto.dropoffAddress !== undefined) updateData.dropoffAddress = updateTripDto.dropoffAddress;
+      if (updateTripDto.dropoffLat !== undefined) updateData.dropoffLat = updateTripDto.dropoffLat;
+      if (updateTripDto.dropoffLng !== undefined) updateData.dropoffLng = updateTripDto.dropoffLng;
+      if (updateTripDto.customerName !== undefined) updateData.customerName = updateTripDto.customerName;
+      if (updateTripDto.customerPhone !== undefined) updateData.customerPhone = updateTripDto.customerPhone;
+      if (updateTripDto.customerEmail !== undefined) updateData.customerEmail = updateTripDto.customerEmail;
+      if (updateTripDto.notes !== undefined) updateData.notes = updateTripDto.notes;
+      if (updateTripDto.tripType !== undefined) updateData.tripType = updateTripDto.tripType;
+      if (updateTripDto.status !== undefined) updateData.status = updateTripDto.status as any;
+      if (updateTripDto.pickupOdometer !== undefined) updateData.pickupOdometer = updateTripDto.pickupOdometer;
+      if (updateTripDto.dropoffOdometer !== undefined) updateData.dropoffOdometer = updateTripDto.dropoffOdometer;
+      if (updateTripDto.reasonForVisit !== undefined) updateData.reasonForVisit = updateTripDto.reasonForVisit;
+      if (updateTripDto.escortName !== undefined) updateData.escortName = updateTripDto.escortName;
+      if (updateTripDto.escortRelationship !== undefined) updateData.escortRelationship = updateTripDto.escortRelationship;
 
-    // Get the current trip to check for driver assignment changes
-    const currentTrip = await this.prisma.trip.findUnique({
-      where: { id },
-      select: { driverId: true, status: true },
-    });
+      if (updateTripDto.memberId) {
+        updateData.member = { connect: { id: updateTripDto.memberId } };
+      }
+      if (updateTripDto.companyId) {
+        updateData.company = { connect: { id: updateTripDto.companyId } };
+      }
+      if (updateTripDto.driverId) {
+        updateData.driver = { connect: { id: updateTripDto.driverId } };
+      }
+      if (updateTripDto.vehicleId) {
+        updateData.vehicle = { connect: { id: updateTripDto.vehicleId } };
+      }
 
-    const updatedTrip = await this.prisma.trip.update({
-      where: { id },
-      data: updateData,
-      include: {
-        driver: true,
-        member: true,
-        vehicle: true,
-        company: true,
-      },
-    });
-
-    // Check if driver was just assigned (new assignment)
-    const wasDriverAssigned = updateTripDto.driverId &&
-      currentTrip?.driverId !== updateTripDto.driverId;
-
-    if (wasDriverAssigned) {
-      this.logger.log(`Trip ${id} assigned to driver ${updateTripDto.driverId}`);
-      // Broadcast to the specific driver via WebSocket
-      this.trackingGateway.broadcastTripAssignment(updateTripDto.driverId!, updatedTrip);
-    } else {
-      // Broadcast general trip update
-      this.trackingGateway.broadcastTripUpdate(updatedTrip);
-    }
-
-    // Check if trip was just completed - trigger PDF generation and email
-    if (updateTripDto.status === 'COMPLETED') {
-      this.logger.log(`Trip ${id} marked as COMPLETED - triggering PDF generation`);
-      // Run PDF generation in background (don't block the response)
-      this.generateAndEmailTripReport(id).catch((error) => {
-        this.logger.error(
-          `Failed to generate/email trip report for ${id}`,
-          error.stack,
-        );
+      // Get the current trip to check for driver assignment changes
+      const currentTrip = await this.prisma.trip.findUnique({
+        where: { id },
+        select: { driverId: true, status: true },
       });
-    }
 
-    // Check if trip was cancelled
-    if (updateTripDto.status === 'CANCELLED') {
-      this.trackingGateway.broadcastTripCancellation(id, currentTrip?.driverId || undefined);
-    }
+      if (!currentTrip) {
+        throw new HttpException(`Trip ${id} not found`, HttpStatus.NOT_FOUND);
+      }
 
-    return updatedTrip;
+      const updatedTrip = await this.prisma.trip.update({
+        where: { id },
+        data: updateData,
+        include: {
+          driver: true,
+          member: true,
+          vehicle: true,
+          company: true,
+        },
+      });
+
+      this.logger.log(`Trip ${id} updated successfully`);
+
+      // Check if driver was just assigned (new assignment)
+      const wasDriverAssigned = updateTripDto.driverId &&
+        currentTrip?.driverId !== updateTripDto.driverId;
+
+      if (wasDriverAssigned) {
+        this.logger.log(`Trip ${id} assigned to driver ${updateTripDto.driverId}`);
+        // Broadcast to the specific driver via WebSocket
+        this.trackingGateway.broadcastTripAssignment(updateTripDto.driverId!, updatedTrip);
+      } else {
+        // Broadcast general trip update
+        this.trackingGateway.broadcastTripUpdate(updatedTrip);
+      }
+
+      // Check if trip was just completed - trigger PDF generation and email
+      if (updateTripDto.status === 'COMPLETED') {
+        this.logger.log(`Trip ${id} marked as COMPLETED - triggering PDF generation`);
+        // Run PDF generation in background (don't block the response)
+        this.generateAndEmailTripReport(id).catch((error) => {
+          this.logger.error(
+            `Failed to generate/email trip report for ${id}`,
+            error.stack,
+          );
+        });
+      }
+
+      // Check if trip was cancelled
+      if (updateTripDto.status === 'CANCELLED') {
+        this.trackingGateway.broadcastTripCancellation(id, currentTrip?.driverId || undefined);
+      }
+
+      return updatedTrip;
+    } catch (error) {
+      this.logger.error(`Error updating trip ${id}: ${error.message}`, error.stack);
+      throw new HttpException(
+        `Failed to update trip: ${error.message}`,
+        error.status || HttpStatus.INTERNAL_SERVER_ERROR
+      );
+    }
   }
 
   /**
