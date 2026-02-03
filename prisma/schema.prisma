@@ -94,6 +94,10 @@ model Vehicle {
   // Odometer tracking
   currentOdometer Int?     // Current odometer reading
 
+  // Capabilities
+  wheelchairAccessible Boolean @default(false)
+  oxygenCapable       Boolean @default(false)
+
   isActive        Boolean  @default(true)
   updatedAt       DateTime @updatedAt
 

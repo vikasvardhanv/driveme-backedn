@@ -417,21 +417,92 @@ export class AzugaService {
       });
 
       if (dbVehicle) {
+        // Extract odometer data from webhook (Azuga sends this in various formats)
+        const odometer = event.odometer || event.odometerReading || event.currentOdometer ||
+                        event.totalDistance || event.mileage;
+
+        const updateData: any = {
+          currentLat: latitude,
+          currentLng: longitude,
+          currentSpeed: speed,
+          lastLocationUpdate: new Date(),
+        };
+
+        // Update odometer if present
+        if (odometer !== undefined && odometer !== null) {
+          const odometerValue = parseInt(odometer.toString());
+          if (!isNaN(odometerValue) && odometerValue > 0) {
+            updateData.currentOdometer = odometerValue;
+            this.logger.log(`Updating vehicle ${dbVehicle.id} odometer to ${odometerValue}`);
+          }
+        }
+
         await this.prisma.vehicle.update({
           where: { id: dbVehicle.id },
-          data: {
-            currentLat: latitude,
-            currentLng: longitude,
-            currentSpeed: speed,
-            lastLocationUpdate: new Date(),
-          }
+          data: updateData
         });
+
+        // Auto-update active trip odometer readings
+        await this.updateActiveTripOdometer(dbVehicle.id, updateData.currentOdometer);
       }
     } catch (dbError) {
       // DB update is optional, don't fail if it errors
       this.logger.debug(`DB update skipped for ${vehicleId}`);
     }
   }
+
+  /**
+   * Auto-update active trip odometer readings based on trip status
+   */
+  private async updateActiveTripOdometer(vehicleId: string, currentOdometer: number) {
+    if (!currentOdometer || isNaN(currentOdometer)) {
+      return;
+    }
+
+    try {
+      // Find active trips for this vehicle
+      const activeTrips = await this.prisma.trip.findMany({
+        where: {
+          vehicleId,
+          status: {
+            in: ['EN_ROUTE', 'ARRIVED', 'PICKED_UP']
+          }
+        }
+      });
+
+      for (const trip of activeTrips) {
+        const updateData: any = {};
+
+        // Update pickup odometer if trip just started (EN_ROUTE) and no pickup odometer yet
+        if (trip.status === 'EN_ROUTE' && !trip.pickupOdometer) {
+          updateData.pickupOdometer = currentOdometer;
+          this.logger.log(`Auto-set pickup odometer for trip ${trip.id}: ${currentOdometer}`);
+        }
+
+        // Update dropoff odometer if trip is picked up (PICKED_UP)
+        if (trip.status === 'PICKED_UP') {
+          updateData.dropoffOdometer = currentOdometer;
+
+          // Calculate trip miles if we have both odometers
+          if (trip.pickupOdometer && currentOdometer > trip.pickupOdometer) {
+            updateData.tripMiles = parseFloat(((currentOdometer - trip.pickupOdometer) / 10).toFixed(1));
+            this.logger.log(`Auto-calculated trip miles for trip ${trip.id}: ${updateData.tripMiles}`);
+          }
+        }
+
+        // Apply updates if any
+        if (Object.keys(updateData).length > 0) {
+          await this.prisma.trip.update({
+            where: { id: trip.id },
+            data: updateData
+          });
+        }
+      }
+    } catch (error) {
+      this.logger.error(`Error updating trip odometer: ${error.message}`);
+    }
+  }
+
   /**
    * Fetch vehicles from Azuga API
    */
@@ -550,6 +621,8 @@ export class AzugaService {
                 vin,
                 isActive: true,
                 vehicleType: 'Taxi', // Default
+                wheelchairAccessible: vehicle.vehicleType?.toLowerCase().includes('wheelchair') || false,
+                oxygenCapable: false, // Default to false unless specified
               }
             });
             result.created++;
