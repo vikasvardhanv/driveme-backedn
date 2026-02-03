@@ -61,7 +61,20 @@ export class AzugaController {
     @Post('sync-drivers')
     async syncDrivers(): Promise<DriverSyncResult> {
         this.logger.log('Manual driver sync triggered');
-        return this.azugaService.syncDriversFromAzuga();
+        try {
+            const result = await this.azugaService.syncDriversFromAzuga();
+            this.logger.log(`Sync completed: ${JSON.stringify(result)}`);
+            return result;
+        } catch (error) {
+            this.logger.error(`Sync failed: ${error.message}`, error.stack);
+            return {
+                synced: 0,
+                created: 0,
+                updated: 0,
+                errors: [error.message],
+                lastSyncAt: new Date().toISOString(),
+            };
+        }
     }
 
     /**

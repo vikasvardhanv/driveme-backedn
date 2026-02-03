@@ -13,6 +13,7 @@ import { TripsModule } from './trips/trips.module';
 import { VehiclesModule } from './vehicles/vehicles.module';
 import { ApplicationsModule } from './applications/applications.module';
 import { UsersModule } from './users/users.module';
+import { SeedModule } from './seed/seed.module';
 
 @Module({
   imports: [
@@ -27,7 +28,8 @@ import { UsersModule } from './users/users.module';
     TripsModule,
     VehiclesModule,
     ApplicationsModule,
-    UsersModule
+    UsersModule,
+    SeedModule
   ],
   controllers: [AppController],
   providers: [AppService],
