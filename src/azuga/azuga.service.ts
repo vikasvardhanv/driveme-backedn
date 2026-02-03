@@ -172,15 +172,21 @@ export class AzugaService {
 
       // SDK uses: limit, offset, userType as query params
       // Using verified endpoint from older code with JWT authentication
+      // 200 OK requires GET + cid header
       const endpoint = `${this.azugaBaseUrl}/users.json?userType=driver&limit=100&offset=0`;
       this.logger.log(`Fetching Drivers from: ${endpoint}`);
 
+      // explicit cast to avoid TS lint for HeadersInit
+      const headers: Record<string, string> = {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'cid': this.clientId || '',
+      };
+
       const response = await fetch(endpoint, {
-        method: 'POST', // API docs say POST for retrieval sometimes, checking context... old code used POST
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
+        method: 'GET',
+        headers,
       });
 
       if (!response.ok) {
@@ -191,8 +197,16 @@ export class AzugaService {
         throw new Error(`Azuga API error: ${response.status} ${response.statusText}`);
       }
 
-      const data = await response.json();
-      this.logger.log(`Fetched ${data.length || 0} drivers from Azuga API`);
+      const text = await response.text();
+      let data: any = [];
+      if (text && text.length > 0) {
+        try {
+          data = JSON.parse(text);
+        } catch (e) {
+          this.logger.warn(`Failed to parse driver response JSON: ${text.substring(0, 100)}...`);
+        }
+      }
+      this.logger.log(`Fetched ${Array.isArray(data) ? data.length : 'unknown'} drivers from Azuga API`);
 
       // Handle different response formats
       if (Array.isArray(data)) {
@@ -776,33 +790,48 @@ export class AzugaService {
     try {
       const token = await this.authenticate();
 
-      // V1 vehicles endpoint also uses POST (405 on GET)
+      // V1 vehicles endpoint also uses POST (405 on GET) - Validation showed GET + cid works
       const endpoint = `${this.azugaBaseUrl}/vehicles.json`;
       this.logger.log(`Fetching Vehicles from: ${endpoint}`);
 
+      // explicit cast to avoid TS lint
+      const headers: Record<string, string> = {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'cid': this.clientId || '',
+      };
+
       const response = await fetch(endpoint, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
+        method: 'GET',
+        headers,
       });
 
       if (!response.ok) {
         throw new Error(`Azuga API error: ${response.status} ${response.statusText}`);
       }
 
-      const data = await response.json();
-      this.logger.log(`Fetched ${data.length || 0} vehicles from Azuga API`);
+      const text = await response.text();
+      let data: any = [];
+      if (text && text.length > 0) {
+        try {
+          data = JSON.parse(text);
+        } catch (e) {
+          this.logger.warn(`Failed to parse vehicle response JSON: ${text.substring(0, 100)}...`);
+        }
+      }
+      this.logger.log(`Fetched ${Array.isArray(data) ? data.length : 'unknown'} vehicles from Azuga API`);
 
       // Handle response formats
       if (Array.isArray(data)) {
         return data;
-      } else if (data.vehicles && Array.isArray(data.vehicles)) {
-        return data.vehicles;
       } else if (data.data && Array.isArray(data.data)) {
         return data.data;
+      } else if (data.vehicles && Array.isArray(data.vehicles)) {
+        return data.vehicles;
       }
+
+      return [];
 
       return [];
     } catch (error) {
