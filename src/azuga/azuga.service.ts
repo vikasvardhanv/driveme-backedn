@@ -423,7 +423,7 @@ export class AzugaService {
 
   private async processVehicleEvent(event: any) {
     // Extract vehicle identifier (Azuga uses different field names)
-    const vehicleId = event.vehicleId || event.serialNumber || event.vin || event.assetId || event.deviceId;
+    const vehicleId = event.vehicleId || event.serialNumber || event.serialNum || event.vin || event.assetId || event.deviceId;
 
     if (!vehicleId) {
       this.logger.warn('Webhook event missing vehicle identifier');
@@ -819,8 +819,8 @@ export class AzugaService {
 
       for (const vehicle of azugaVehicles) {
         try {
-          const vin = vehicle.vin || vehicle.deviceSerial || vehicle.serialNumber;
-          const licensePlate = vehicle.licensePlate || vehicle.vehicleName || vehicle.name;
+          const vin = vehicle.vin || vehicle.deviceSerial || vehicle.serialNumber || vehicle.serialNum;
+          const licensePlate = vehicle.licensePlate || vehicle.licensePlateNo || vehicle.vehicleName || vehicle.name;
 
           if (!vin || !licensePlate) {
             // Skip if essential identifiers are missing
