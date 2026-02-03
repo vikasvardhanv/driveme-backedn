@@ -171,54 +171,34 @@ export class AzugaService {
     try {
       const token = await this.authenticate();
 
-      // SDK uses: limit, offset, userType as query params
-      // Using verified endpoint from older code with JWT authentication
-      // 200 OK requires GET + cid header
-      const endpoint = `${this.azugaBaseUrl}/users.json?userType=driver&limit=100&offset=0`;
+      // V3 Endpoint for Users (Drivers)
+      // Endpoint: POST /users
+      const endpoint = `${this.azugaBaseUrl}/users`;
       this.logger.log(`Fetching Drivers from: ${endpoint}`);
 
-      // explicit cast to avoid TS lint for HeadersInit
-      const headers: Record<string, string> = {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-        'cid': this.clientId || '',
-      };
-
       const response = await fetch(endpoint, {
-        method: 'GET',
-        headers,
+        method: 'POST', // V3 uses POST
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+        },
+        body: JSON.stringify({}), // V3 requires empty body
       });
 
       if (!response.ok) {
         if (response.status === 401) {
-          // Token might be invalid despite check, force refresh next time?
           this.accessToken = null;
         }
         throw new Error(`Azuga API error: ${response.status} ${response.statusText}`);
       }
 
-      const text = await response.text();
-      let data: any = [];
-      if (text && text.length > 0) {
-        try {
-          data = JSON.parse(text);
-        } catch (e) {
-          this.logger.warn(`Failed to parse driver response JSON: ${text.substring(0, 100)}...`);
-        }
-      }
-      this.logger.log(`Fetched ${Array.isArray(data) ? data.length : 'unknown'} drivers from Azuga API`);
+      const body = await response.json();
+      // V3 structure: { generatedAtInMillis: number, data: [...] }
+      const drivers = body.data || [];
 
-      // Handle different response formats
-      if (Array.isArray(data)) {
-        return data;
-      } else if (data.users && Array.isArray(data.users)) {
-        return data.users;
-      } else if (data.data && Array.isArray(data.data)) {
-        return data.data;
-      }
-
-      return [];
+      this.logger.log(`Fetched ${drivers.length} drivers from Azuga API`);
+      return drivers;
     } catch (error) {
       this.logger.error('Failed to fetch drivers from Azuga API', error);
       throw error;
