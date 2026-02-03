@@ -327,7 +327,37 @@ export class AzugaService {
             [payload];
 
       for (const event of events) {
-        await this.processVehicleEvent(event);
+        const eventType = event.eventType || event.event_type || event.type;
+        this.logger.log(`Processing Azuga event: ${eventType}`);
+
+        // Process different event types
+        switch (eventType) {
+          case 'Trip Start':
+          case 'TRIP_START':
+            await this.handleTripStartEvent(event);
+            break;
+          case 'Trip End':
+          case 'TRIP_END':
+            await this.handleTripEndEvent(event);
+            break;
+          case 'Trip Address':
+          case 'TRIP_ADDRESS':
+          case 'GPS MESSAGE':
+          case 'GPS_MESSAGE':
+            await this.processVehicleEvent(event);
+            break;
+          case 'Over Speeding':
+          case 'OVER_SPEEDING':
+          case 'Hard Acceleration':
+          case 'HARD_ACCELERATION':
+          case 'Hard Brake':
+          case 'HARD_BRAKE':
+            await this.handleSafetyEvent(event);
+            break;
+          default:
+            // Process as general vehicle update
+            await this.processVehicleEvent(event);
+        }
       }
     } catch (error) {
       this.logger.error('Error processing Azuga Webhook', error);
@@ -501,6 +531,180 @@ export class AzugaService {
     } catch (error) {
       this.logger.error(`Error updating trip odometer: ${error.message}`);
     }
+  }
+
+  /**
+   * Handle Trip Start events from Azuga
+   */
+  private async handleTripStartEvent(event: any) {
+    this.logger.log('Processing Trip Start event');
+
+    const vehicleId = event.vehicleId || event.serialNumber || event.vin || event.assetId;
+    const odometer = event.odometer || event.odometerReading || event.currentOdometer;
+    const latitude = parseFloat(event.latitude || event.lat || event.gpsLatitude || 0);
+    const longitude = parseFloat(event.longitude || event.lng || event.gpsLongitude || 0);
+
+    if (!vehicleId) {
+      this.logger.warn('Trip Start event missing vehicle identifier');
+      return;
+    }
+
+    try {
+      // Find the vehicle in DB
+      const vehicle = await this.prisma.vehicle.findFirst({
+        where: {
+          OR: [
+            { vin: vehicleId },
+            { licensePlate: vehicleId },
+          ]
+        }
+      });
+
+      if (!vehicle) {
+        this.logger.warn(`Vehicle ${vehicleId} not found in database`);
+        return;
+      }
+
+      // Find active trip for this vehicle
+      const activeTrip = await this.prisma.trip.findFirst({
+        where: {
+          vehicleId: vehicle.id,
+          status: 'EN_ROUTE'
+        }
+      });
+
+      if (activeTrip) {
+        const updateData: any = {};
+
+        // Set pickup odometer
+        if (odometer) {
+          const odometerValue = parseInt(odometer.toString());
+          if (!isNaN(odometerValue) && !activeTrip.pickupOdometer) {
+            updateData.pickupOdometer = odometerValue;
+          }
+        }
+
+        // Set pickup coordinates from Azuga GPS
+        if (latitude && longitude && !activeTrip.pickupLat) {
+          updateData.pickupLat = latitude;
+          updateData.pickupLng = longitude;
+          this.logger.log(`Set pickup coordinates for trip ${activeTrip.id}: ${latitude}, ${longitude}`);
+        }
+
+        if (Object.keys(updateData).length > 0) {
+          await this.prisma.trip.update({
+            where: { id: activeTrip.id },
+            data: updateData
+          });
+          this.logger.log(`Updated trip ${activeTrip.id} on Trip Start`);
+        }
+      }
+    } catch (error) {
+      this.logger.error(`Error handling Trip Start: ${error.message}`);
+    }
+
+    // Also process as regular vehicle event for location tracking
+    await this.processVehicleEvent(event);
+  }
+
+  /**
+   * Handle Trip End events from Azuga
+   */
+  private async handleTripEndEvent(event: any) {
+    this.logger.log('Processing Trip End event');
+
+    const vehicleId = event.vehicleId || event.serialNumber || event.vin || event.assetId;
+    const odometer = event.odometer || event.odometerReading || event.currentOdometer;
+    const tripDistance = event.tripDistance || event.distance || event.miles;
+    const latitude = parseFloat(event.latitude || event.lat || event.gpsLatitude || 0);
+    const longitude = parseFloat(event.longitude || event.lng || event.gpsLongitude || 0);
+
+    if (!vehicleId) {
+      this.logger.warn('Trip End event missing vehicle identifier');
+      return;
+    }
+
+    try {
+      // Find the vehicle in DB
+      const vehicle = await this.prisma.vehicle.findFirst({
+        where: {
+          OR: [
+            { vin: vehicleId },
+            { licensePlate: vehicleId },
+          ]
+        }
+      });
+
+      if (!vehicle) {
+        this.logger.warn(`Vehicle ${vehicleId} not found in database`);
+        return;
+      }
+
+      // Find active/picked up trip for this vehicle
+      const activeTrip = await this.prisma.trip.findFirst({
+        where: {
+          vehicleId: vehicle.id,
+          status: { in: ['EN_ROUTE', 'PICKED_UP', 'ARRIVED'] }
+        }
+      });
+
+      if (activeTrip) {
+        const updateData: any = {};
+
+        // Set dropoff odometer
+        if (odometer) {
+          const odometerValue = parseInt(odometer.toString());
+          if (!isNaN(odometerValue)) {
+            updateData.dropoffOdometer = odometerValue;
+
+            // Calculate miles if we have pickup odometer
+            if (activeTrip.pickupOdometer && odometerValue > activeTrip.pickupOdometer) {
+              updateData.tripMiles = parseFloat(((odometerValue - activeTrip.pickupOdometer) / 10).toFixed(1));
+              this.logger.log(`Calculated trip miles: ${updateData.tripMiles}`);
+            }
+          }
+        }
+
+        // Set dropoff coordinates from Azuga GPS
+        if (latitude && longitude && !activeTrip.dropoffLat) {
+          updateData.dropoffLat = latitude;
+          updateData.dropoffLng = longitude;
+          this.logger.log(`Set dropoff coordinates for trip ${activeTrip.id}: ${latitude}, ${longitude}`);
+        }
+
+        // If Azuga provides trip distance directly
+        if (tripDistance && !updateData.tripMiles) {
+          updateData.tripMiles = parseFloat(tripDistance.toString());
+        }
+
+        if (Object.keys(updateData).length > 0) {
+          await this.prisma.trip.update({
+            where: { id: activeTrip.id },
+            data: updateData
+          });
+          this.logger.log(`Updated trip ${activeTrip.id} on Trip End`);
+        }
+      }
+    } catch (error) {
+      this.logger.error(`Error handling Trip End: ${error.message}`);
+    }
+
+    // Also process as regular vehicle event
+    await this.processVehicleEvent(event);
+  }
+
+  /**
+   * Handle safety events (speeding, hard brake, etc.)
+   */
+  private async handleSafetyEvent(event: any) {
+    const eventType = event.eventType || event.event_type || event.type;
+    this.logger.log(`Safety Event: ${eventType}`);
+
+    // Process as regular vehicle event to update location
+    await this.processVehicleEvent(event);
+
+    // TODO: Store safety events in database or send notifications
+    // For now, just log them
   }
 
   /**
