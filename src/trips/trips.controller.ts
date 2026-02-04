@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete, Res, HttpStatus } from '@nestjs/common';
+import { Controller, Get, Post, Body, Patch, Param, Delete, Res, HttpStatus, Query } from '@nestjs/common';
 import type { Response } from 'express';
 import { TripsService } from './trips.service';
 import { CreateTripDto } from './dto/create-trip.dto';
@@ -14,8 +14,8 @@ export class TripsController {
   }
 
   @Get()
-  findAll() {
-    return this.tripsService.findAll();
+  findAll(@Query('date') date?: string) {
+    return this.tripsService.findAll(date);
   }
 
   @Get(':id')

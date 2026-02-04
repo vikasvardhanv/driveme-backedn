@@ -126,9 +126,25 @@ export class TripsService {
     }
   }
 
-  async findAll() {
+  async findAll(date?: string) {
+    const where: Prisma.TripWhereInput = {};
+
+    if (date) {
+      // Parse date string (assumed YYYY-MM-DD from frontend)
+      // Create start and end of day in UTC or local time?
+      // Assuming naive date for now; better to handle timzones properly later
+      const startOfDay = new Date(`${date}T00:00:00`);
+      const endOfDay = new Date(`${date}T23:59:59`);
+
+      where.scheduledPickupTime = {
+        gte: startOfDay,
+        lte: endOfDay,
+      };
+    }
+
     const trips = await this.prisma.trip.findMany({
-      orderBy: { createdAt: 'desc' },
+      where,
+      orderBy: { scheduledPickupTime: 'asc' }, // Sort by time for the dashboard
       include: {
         driver: {
           select: { firstName: true, lastName: true },
@@ -396,7 +412,7 @@ export class TripsService {
     // Regenerate PDFs for completed trips with signatures but no PDF
     const tripsNeedingPDF = tripsWithoutCompany.filter(
       t => t.status === 'COMPLETED' &&
-           (t.driverSignatureUrl || t.memberSignatureUrl)
+        (t.driverSignatureUrl || t.memberSignatureUrl)
     );
 
     this.logger.log(`Regenerating ${tripsNeedingPDF.length} PDFs...`);
