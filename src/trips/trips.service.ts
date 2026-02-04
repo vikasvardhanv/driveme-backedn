@@ -306,6 +306,13 @@ export class TripsService {
         lastName: true,
         email: true,
         isActive: true,
+        vehicle: {
+          select: {
+            make: true,
+            model: true,
+            licensePlate: true,
+          }
+        }
       },
     });
   }
