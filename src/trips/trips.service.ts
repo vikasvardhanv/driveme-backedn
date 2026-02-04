@@ -10,13 +10,56 @@ import { TrackingGateway } from '../tracking/tracking.gateway';
 @Injectable()
 export class TripsService {
   private readonly logger = new Logger(TripsService.name);
+  private defaultCompanyId: string | null = null;
 
   constructor(
     private prisma: PrismaService,
     private pdfService: PdfService,
     private emailService: EmailService,
     private trackingGateway: TrackingGateway,
-  ) { }
+  ) {
+    this.initializeDefaultCompany();
+  }
+
+  /**
+   * Initialize and cache the default company (YazTrans)
+   */
+  private async initializeDefaultCompany() {
+    try {
+      // Try to find existing YazTrans company
+      let company = await this.prisma.company.findFirst({
+        where: {
+          OR: [
+            { name: { contains: 'YazTrans', mode: 'insensitive' } },
+            { name: { contains: 'Yaz Trans', mode: 'insensitive' } },
+          ],
+        },
+      });
+
+      // If not found, create default company
+      if (!company) {
+        this.logger.log('Creating default YazTrans NEMT company...');
+        company = await this.prisma.company.create({
+          data: {
+            name: 'YazTrans NEMT Services',
+            ahcccsProviderId: 'YAZ001', // Update with real AHCCCS Provider ID
+            address: '123 Main Street',
+            city: 'Phoenix',
+            state: 'AZ',
+            zipCode: '85001',
+            phone: '(555) 123-4567',
+            email: 'dispatch@yaztrans.com',
+          },
+        });
+        this.logger.log(`Created default company: ${company.id}`);
+      }
+
+      this.defaultCompanyId = company.id;
+      this.logger.log(`Default company initialized: ${company.name} (${company.id})`);
+    } catch (error) {
+      this.logger.error('Failed to initialize default company:', error);
+    }
+  }
 
   async create(createTripDto: CreateTripDto) {
     try {
@@ -50,8 +93,14 @@ export class TripsService {
       if (createTripDto.memberId) {
         data.member = { connect: { id: createTripDto.memberId } };
       }
-      if (createTripDto.companyId) {
-        data.company = { connect: { id: createTripDto.companyId } };
+
+      // Auto-assign default company if not provided
+      const companyId = createTripDto.companyId || this.defaultCompanyId;
+      if (companyId) {
+        data.company = { connect: { id: companyId } };
+        this.logger.log(`Assigning trip to company: ${companyId}`);
+      } else {
+        this.logger.warn('No default company available - trip created without company');
       }
 
       const trip = await this.prisma.trip.create({
@@ -315,5 +364,55 @@ export class TripsService {
         }
       },
     });
+  }
+
+  /**
+   * Update existing trips to assign default company and regenerate PDFs
+   * Call this once to fix existing data
+   */
+  async assignDefaultCompanyToExistingTrips() {
+    if (!this.defaultCompanyId) {
+      throw new Error('Default company not initialized');
+    }
+
+    this.logger.log('Assigning default company to existing trips...');
+
+    // Find trips without company
+    const tripsWithoutCompany = await this.prisma.trip.findMany({
+      where: { companyId: null },
+      select: { id: true, status: true, driverSignatureUrl: true, memberSignatureUrl: true },
+    });
+
+    this.logger.log(`Found ${tripsWithoutCompany.length} trips without company`);
+
+    // Update all trips to have the default company
+    await this.prisma.trip.updateMany({
+      where: { companyId: null },
+      data: { companyId: this.defaultCompanyId },
+    });
+
+    this.logger.log('Company assigned to all trips');
+
+    // Regenerate PDFs for completed trips with signatures but no PDF
+    const tripsNeedingPDF = tripsWithoutCompany.filter(
+      t => t.status === 'COMPLETED' &&
+           (t.driverSignatureUrl || t.memberSignatureUrl)
+    );
+
+    this.logger.log(`Regenerating ${tripsNeedingPDF.length} PDFs...`);
+
+    for (const trip of tripsNeedingPDF) {
+      try {
+        await this.generateAndEmailTripReport(trip.id);
+        this.logger.log(`PDF generated for trip ${trip.id}`);
+      } catch (error) {
+        this.logger.error(`Failed to generate PDF for trip ${trip.id}:`, error);
+      }
+    }
+
+    return {
+      tripsUpdated: tripsWithoutCompany.length,
+      pdfsGenerated: tripsNeedingPDF.length,
+    };
   }
 }

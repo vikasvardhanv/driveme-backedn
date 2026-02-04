@@ -60,4 +60,13 @@ export class TripsController {
   getDrivers() {
     return this.tripsService.findAllDrivers();
   }
+
+  /**
+   * Fix existing trips by assigning default company and regenerating PDFs
+   * This is a one-time migration endpoint
+   */
+  @Post('fix-existing-trips')
+  async fixExistingTrips() {
+    return this.tripsService.assignDefaultCompanyToExistingTrips();
+  }
 }
