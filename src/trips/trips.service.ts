@@ -126,19 +126,21 @@ export class TripsService {
     }
   }
 
-  async findAll(date?: string) {
+  async findAll(startDate?: string, endDate?: string) {
     const where: Prisma.TripWhereInput = {};
 
-    if (date) {
-      // Parse date string (assumed YYYY-MM-DD from frontend)
-      // Create start and end of day in UTC or local time?
-      // Assuming naive date for now; better to handle timzones properly later
-      const startOfDay = new Date(`${date}T00:00:00`);
-      const endOfDay = new Date(`${date}T23:59:59`);
+    if (startDate) {
+      // Parse start date
+      const start = new Date(`${startDate}T00:00:00`);
+
+      // Determine end date
+      // If endDate is provided, use it. Otherwise, assume single day filtering (end of startDate)
+      const endString = endDate || startDate;
+      const end = new Date(`${endString}T23:59:59`);
 
       where.scheduledPickupTime = {
-        gte: startOfDay,
-        lte: endOfDay,
+        gte: start,
+        lte: end,
       };
     }
 

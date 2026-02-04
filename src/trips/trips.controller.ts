@@ -14,8 +14,8 @@ export class TripsController {
   }
 
   @Get()
-  findAll(@Query('date') date?: string) {
-    return this.tripsService.findAll(date);
+  findAll(@Query('startDate') startDate?: string, @Query('endDate') endDate?: string) {
+    return this.tripsService.findAll(startDate, endDate);
   }
 
   @Get(':id')
