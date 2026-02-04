@@ -77,12 +77,81 @@ export class CreateTripDto {
 
     // AHCCCS-specific fields
     @IsOptional()
+    // Metric/Time fields
+    @IsOptional()
+    @IsDateString()
+    tripStartTime?: string;
+
+    @IsOptional()
+    @IsDateString()
+    arrivedAtPickupTime?: string;
+
+    @IsOptional()
+    @IsDateString()
+    actualPickupTime?: string;
+
+    @IsOptional()
+    @IsDateString()
+    actualDropoffTime?: string;
+
+    // Odometer
+    @IsOptional()
+    @IsNumber()
+    startOdometer?: number;
+
+    @IsOptional()
     @IsNumber()
     pickupOdometer?: number;
 
     @IsOptional()
     @IsNumber()
     dropoffOdometer?: number;
+
+    // Mileage
+    @IsOptional()
+    @IsNumber()
+    emptyMiles?: number;
+
+    @IsOptional()
+    @IsNumber()
+    loadedMiles?: number;
+
+    @IsOptional()
+    @IsNumber()
+    tripMiles?: number;
+
+    // GPS metrics
+    @IsOptional()
+    @IsNumber()
+    tripStartLat?: number;
+
+    @IsOptional()
+    @IsNumber()
+    tripStartLng?: number;
+
+    @IsOptional()
+    @IsNumber()
+    arrivedAtPickupLat?: number;
+
+    @IsOptional()
+    @IsNumber()
+    arrivedAtPickupLng?: number;
+
+    @IsOptional()
+    @IsNumber()
+    pickedUpLat?: number;
+
+    @IsOptional()
+    @IsNumber()
+    pickedUpLng?: number;
+
+    @IsOptional()
+    @IsNumber()
+    completedLat?: number;
+
+    @IsOptional()
+    @IsNumber()
+    completedLng?: number;
 
     @IsOptional()
     @IsString()

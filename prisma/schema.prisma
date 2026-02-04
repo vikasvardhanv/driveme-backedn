@@ -117,6 +117,7 @@ model Trip {
   company   Company? @relation(fields: [companyId], references: [id])
 
   status   TripStatus @default(SCHEDULED)
+  tripNumber Int      @default(autoincrement()) // Readable Trip ID for dispatch
   tripType String     @default("one-way") // one-way, round-trip, multiple-stops
 
   // Guest info (for public web form submissions)
@@ -144,15 +145,33 @@ model Trip {
   secondDropoffLng     Float?
 
   scheduledPickupTime DateTime
-  actualPickupTime    DateTime?
-  actualDropoffTime   DateTime?
+  actualPickupTime    DateTime? // When member gets in vehicle
+  actualDropoffTime   DateTime? // When trip completes
+
+  // Additional time tracking for metrics
+  tripStartTime       DateTime? // When driver swipes "Start Trip" (EN_ROUTE)
+  arrivedAtPickupTime DateTime? // When driver swipes "Arrive at Pickup" (ARRIVED)
 
   // AHCCCS-specific fields
-  pickupOdometer        Int? // Odometer reading at pickup
-  dropoffOdometer       Int? // Odometer reading at dropoff
+  startOdometer         Int? // Odometer when trip started (EN_ROUTE)
+  pickupOdometer        Int? // Odometer reading at pickup (PICKED_UP)
+  dropoffOdometer       Int? // Odometer reading at dropoff (COMPLETED)
   secondPickupOdometer  Int? // For round trips
   secondDropoffOdometer Int? // For round trips
-  tripMiles             Float? // Calculated trip distance
+
+  tripMiles   Float? // Total trip distance
+  emptyMiles  Float? // Miles without passenger (start to pickup)
+  loadedMiles Float? // Miles with passenger (pickup to dropoff)
+
+  // GPS coordinates at key events (for compliance)
+  tripStartLat      Float? // Location when trip started
+  tripStartLng      Float?
+  arrivedAtPickupLat Float? // Location when arrived at pickup
+  arrivedAtPickupLng Float?
+  pickedUpLat       Float? // Location when member picked up
+  pickedUpLng       Float?
+  completedLat      Float? // Location when trip completed
+  completedLng      Float?
 
   reasonForVisit     String? // Reason for medical visit
   escortName         String? // Name of escort (if any)

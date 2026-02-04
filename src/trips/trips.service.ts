@@ -87,6 +87,26 @@ export class TripsService {
         tripType: createTripDto.tripType || 'one-way',
         scheduledPickupTime,
         status: 'SCHEDULED',
+
+        // Metrics & GPS (if provided during creation)
+        tripStartTime: createTripDto.tripStartTime ? new Date(createTripDto.tripStartTime) : undefined,
+        arrivedAtPickupTime: createTripDto.arrivedAtPickupTime ? new Date(createTripDto.arrivedAtPickupTime) : undefined,
+        actualPickupTime: createTripDto.actualPickupTime ? new Date(createTripDto.actualPickupTime) : undefined,
+        actualDropoffTime: createTripDto.actualDropoffTime ? new Date(createTripDto.actualDropoffTime) : undefined,
+        startOdometer: createTripDto.startOdometer,
+        pickupOdometer: createTripDto.pickupOdometer,
+        dropoffOdometer: createTripDto.dropoffOdometer,
+        emptyMiles: createTripDto.emptyMiles,
+        loadedMiles: createTripDto.loadedMiles,
+        tripMiles: createTripDto.tripMiles,
+        tripStartLat: createTripDto.tripStartLat,
+        tripStartLng: createTripDto.tripStartLng,
+        arrivedAtPickupLat: createTripDto.arrivedAtPickupLat,
+        arrivedAtPickupLng: createTripDto.arrivedAtPickupLng,
+        pickedUpLat: createTripDto.pickedUpLat,
+        pickedUpLng: createTripDto.pickedUpLng,
+        completedLat: createTripDto.completedLat,
+        completedLng: createTripDto.completedLng,
       };
 
       // Optionally connect to a member if provided
@@ -130,6 +150,7 @@ export class TripsService {
     const where: Prisma.TripWhereInput = {};
 
     if (startDate) {
+      this.logger.log(`Filtering trips from ${startDate} to ${endDate || startDate}`);
       // Parse start date
       const start = new Date(`${startDate}T00:00:00`);
 
@@ -142,7 +163,11 @@ export class TripsService {
         gte: start,
         lte: end,
       };
+    } else {
+      this.logger.log('No date filter provided - returning all trips');
     }
+
+    this.logger.log(`Querying trips with where clause: ${JSON.stringify(where)}`);
 
     const trips = await this.prisma.trip.findMany({
       where,
@@ -194,6 +219,28 @@ export class TripsService {
       if (updateTripDto.reasonForVisit !== undefined) updateData.reasonForVisit = updateTripDto.reasonForVisit;
       if (updateTripDto.escortName !== undefined) updateData.escortName = updateTripDto.escortName;
       if (updateTripDto.escortRelationship !== undefined) updateData.escortRelationship = updateTripDto.escortRelationship;
+
+      // Time tracking
+      if (updateTripDto.tripStartTime !== undefined) updateData.tripStartTime = updateTripDto.tripStartTime ? new Date(updateTripDto.tripStartTime) : null;
+      if (updateTripDto.arrivedAtPickupTime !== undefined) updateData.arrivedAtPickupTime = updateTripDto.arrivedAtPickupTime ? new Date(updateTripDto.arrivedAtPickupTime) : null;
+      if (updateTripDto.actualPickupTime !== undefined) updateData.actualPickupTime = updateTripDto.actualPickupTime ? new Date(updateTripDto.actualPickupTime) : null;
+      if (updateTripDto.actualDropoffTime !== undefined) updateData.actualDropoffTime = updateTripDto.actualDropoffTime ? new Date(updateTripDto.actualDropoffTime) : null;
+
+      // Odometer & Mileage
+      if (updateTripDto.startOdometer !== undefined) updateData.startOdometer = updateTripDto.startOdometer;
+      if (updateTripDto.emptyMiles !== undefined) updateData.emptyMiles = updateTripDto.emptyMiles;
+      if (updateTripDto.loadedMiles !== undefined) updateData.loadedMiles = updateTripDto.loadedMiles;
+      if (updateTripDto.tripMiles !== undefined) updateData.tripMiles = updateTripDto.tripMiles;
+
+      // GPS Coordinates
+      if (updateTripDto.tripStartLat !== undefined) updateData.tripStartLat = updateTripDto.tripStartLat;
+      if (updateTripDto.tripStartLng !== undefined) updateData.tripStartLng = updateTripDto.tripStartLng;
+      if (updateTripDto.arrivedAtPickupLat !== undefined) updateData.arrivedAtPickupLat = updateTripDto.arrivedAtPickupLat;
+      if (updateTripDto.arrivedAtPickupLng !== undefined) updateData.arrivedAtPickupLng = updateTripDto.arrivedAtPickupLng;
+      if (updateTripDto.pickedUpLat !== undefined) updateData.pickedUpLat = updateTripDto.pickedUpLat;
+      if (updateTripDto.pickedUpLng !== undefined) updateData.pickedUpLng = updateTripDto.pickedUpLng;
+      if (updateTripDto.completedLat !== undefined) updateData.completedLat = updateTripDto.completedLat;
+      if (updateTripDto.completedLng !== undefined) updateData.completedLng = updateTripDto.completedLng;
 
       if (updateTripDto.memberId) {
         updateData.member = { connect: { id: updateTripDto.memberId } };
