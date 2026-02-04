@@ -74,8 +74,8 @@ export class AzugaService {
   private readonly clientId = process.env.AZUGA_CLIENT_ID;
   private readonly apiUsername = process.env.AZUGA_USERNAME;
   private readonly apiPassword = process.env.AZUGA_PASSWORD;
-  // Hardcoding verified endpoint to prevent env var misconfiguration (which caused 404s on services.azuga.com)
-  private readonly azugaBaseUrl = 'https://api.azuga.com/azuga-ws/v1';
+  // Hardcoding verified V3 OAuth endpoint
+  private readonly azugaBaseUrl = 'https://services.azuga.com/azuga-ws-oauth/v3';
 
   // Auth Token State
   private accessToken: string | null = null;
