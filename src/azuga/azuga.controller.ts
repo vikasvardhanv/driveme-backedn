@@ -33,8 +33,21 @@ export class AzugaController {
     }
 
     @Get('vehicles/locations')
-    getVehicleLocations(): CachedVehicle[] {
-        return this.azugaService.getCachedVehicles();
+    async getVehicleLocations(): Promise<CachedVehicle[]> {
+        const cachedVehicles = this.azugaService.getCachedVehicles();
+
+        if (cachedVehicles.length === 0) {
+            this.logger.log('Vehicle location cache empty, fetching from Azuga...');
+            try {
+                await this.azugaService.syncVehiclesFromAzuga();
+                return this.azugaService.getCachedVehicles();
+            } catch (error) {
+                this.logger.error('Failed to auto-fetch vehicle locations', error);
+                return [];
+            }
+        }
+
+        return cachedVehicles;
     }
 
     @Get('drivers')
