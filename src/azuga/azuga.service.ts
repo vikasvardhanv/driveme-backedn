@@ -187,10 +187,13 @@ export class AzugaService {
       });
 
       if (!response.ok) {
+        const errorText = await response.text();
+        this.logger.error(`Azuga Drivers API Failed: ${response.status} ${response.statusText} - Body: ${errorText.substring(0, 500)}`);
+
         if (response.status === 401) {
           this.accessToken = null;
         }
-        throw new Error(`Azuga API error: ${response.status} ${response.statusText}`);
+        throw new Error(`Azuga API error: ${response.status} ${response.statusText} - ${errorText.substring(0, 100)}`);
       }
 
       const body = await response.json();
@@ -784,10 +787,13 @@ export class AzugaService {
       });
 
       if (!response.ok) {
+        const errorText = await response.text();
+        this.logger.error(`Azuga Vehicles API Failed: ${response.status} ${response.statusText} - Body: ${errorText.substring(0, 500)}`);
+
         if (response.status === 401) {
           this.accessToken = null;
         }
-        throw new Error(`Azuga API error: ${response.status} ${response.statusText}`);
+        throw new Error(`Azuga API error: ${response.status} ${response.statusText} - ${errorText.substring(0, 100)}`);
       }
 
       const body = await response.json();
