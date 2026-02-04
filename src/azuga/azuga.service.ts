@@ -237,12 +237,12 @@ export class AzugaService {
 
       for (const azugaDriver of azugaDrivers) {
         try {
-          const email = azugaDriver.email?.toLowerCase().trim();
+          // Handle missing email by generating a unique placeholder
+          let email = azugaDriver.email?.toLowerCase().trim();
           if (!email) {
-            // Some drivers might not have email, try username or skip
-            // If strictly creating users, we need email unique
-            result.errors.push(`Driver ${azugaDriver.firstName} ${azugaDriver.lastName} has no email, skipped`);
-            continue;
+            // Use a consistent placeholder format that won't collide
+            email = `no-email-${azugaDriver.id}@yaztrans.com`;
+            this.logger.warn(`Driver ${azugaDriver.firstName} ${azugaDriver.lastName} has no email, using placeholder: ${email}`);
           }
 
           // Check if user already exists
