@@ -1,8 +1,52 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { PDFDocument, PDFForm, PDFTextField, PDFCheckBox, rgb } from 'pdf-lib';
+import { createClient } from '@supabase/supabase-js';
+import { PDFDocument, StandardFonts } from 'pdf-lib';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import { PrismaService } from '../prisma/prisma.service';
+import {
+  BoxPosition,
+  TextPosition,
+  tripReportLayout,
+} from './ahcccs-trip-report.layout';
+
+export type TripReportData = {
+  providerInfo?: string;
+  driverName?: string;
+  tripDate?: string;
+  vehicleLicense?: string;
+  vehicleMakeColor?: string;
+  vehicleType?: string;
+
+  ahcccsNumber?: string;
+  memberDob?: string;
+  memberName?: string;
+  mailingAddress?: string;
+
+  pickupAddress?: string;
+  pickupTime?: string;
+  pickupOdometer?: string | number;
+  dropoffAddress?: string;
+  dropoffTime?: string;
+  dropoffOdometer?: string | number;
+  tripMiles?: string | number;
+
+  reasonForVisit?: string;
+  escortName?: string;
+  escortRelationship?: string;
+
+  secondPickupAddress?: string;
+  secondPickupTime?: string;
+  secondPickupOdometer?: string | number;
+  secondDropoffAddress?: string;
+  secondDropoffTime?: string;
+  secondDropoffOdometer?: string | number;
+  secondTripMiles?: string | number;
+
+  tripType?: string;
+  memberSignature?: string;
+  driverSignature?: string;
+};
 
 @Injectable()
 export class PdfService {
@@ -15,13 +59,12 @@ export class PdfService {
     'AHCCCSDailyTripReportFinal.pdf',
   );
 
-  constructor(private prisma: PrismaService) { }
+  constructor(private prisma: PrismaService) {}
 
   async generateTripReport(tripId: string): Promise<Buffer> {
     this.logger.log(`Generating AHCCCS Daily Trip Report for Trip: ${tripId}`);
 
     try {
-      // Fetch trip with all related data
       const trip = await this.prisma.trip.findUnique({
         where: { id: tripId },
         include: {
@@ -40,389 +83,318 @@ export class PdfService {
         throw new Error(`Trip ${tripId} has no company assigned`);
       }
 
-      // Load the PDF template
-      const templateBytes = await fs.readFile(this.templatePath);
-      const pdfDoc = await PDFDocument.load(templateBytes);
-      const form = pdfDoc.getForm();
-
-      // Fill in NEMT Provider Information
-      this.fillProviderInfo(form, trip.company);
-
-      // Fill in Driver and Vehicle Information
-      this.fillDriverVehicleInfo(form, trip);
-
-      // Fill in Member Information
-      this.fillMemberInfo(form, trip);
-
-      // Fill in Trip Details
-      this.fillTripDetails(form, trip);
-
-      // Embed signatures if available
-      await this.embedSignatures(pdfDoc, trip);
-
-      // Flatten the form to make it non-editable
-      form.flatten();
-
-      // Save the filled PDF
-      const pdfBytes = await pdfDoc.save();
-      this.logger.log(`Successfully generated PDF for Trip ${tripId}`);
-
-      return Buffer.from(pdfBytes);
+      const reportData = this.buildTripReportData(trip);
+      return this.generateTripReportFromData(reportData);
     } catch (error) {
-      this.logger.error(
-        `Error generating PDF for Trip ${tripId}`,
-        error.stack,
-      );
+      this.logger.error(`Error generating PDF for Trip ${tripId}`, error.stack);
       throw error;
     }
   }
 
-  private fillProviderInfo(form: PDFForm, company: any) {
-    try {
-      // NEMT AHCCCS Provider ID, Name, Address, and Phone Number
-      const providerInfoText = `Provider ID: ${company.ahcccsProviderId}\n${company.name}\n${company.address}${company.city ? ', ' + company.city : ''}${company.state ? ', ' + company.state : ''}${company.zipCode ? ' ' + company.zipCode : ''}\nPhone: ${company.phone}`;
+  buildTripReportData(trip: any): TripReportData {
+    const providerInfo = trip.company
+      ? `Provider ID: ${trip.company.ahcccsProviderId || ''}\n${trip.company.name || ''}\n${trip.company.address || ''}${trip.company.city ? ', ' + trip.company.city : ''}${trip.company.state ? ', ' + trip.company.state : ''}${trip.company.zipCode ? ' ' + trip.company.zipCode : ''}\nPhone: ${trip.company.phone || ''}`
+      : '';
 
-      const providerField = form.getTextField('NEMT_Provider_Info');
-      if (providerField) {
-        providerField.setText(providerInfoText);
-      }
-    } catch (error) {
-      this.logger.warn('Could not fill provider info fields', error.message);
-    }
+    const tripDate = this.formatDate(
+      trip.actualPickupTime || trip.tripStartTime || trip.scheduledPickupTime,
+    );
+
+    const pickupTime = this.formatTime(
+      trip.actualPickupTime || trip.arrivedAtPickupTime || trip.tripStartTime,
+    );
+    const dropoffTime = this.formatTime(trip.actualDropoffTime);
+
+    const tripMiles =
+      trip.tripMiles ??
+      (trip.pickupOdometer && trip.dropoffOdometer
+        ? trip.dropoffOdometer - trip.pickupOdometer
+        : undefined);
+
+    return {
+      providerInfo,
+      driverName: trip.driver
+        ? `${trip.driver.firstName} ${trip.driver.lastName}`
+        : undefined,
+      tripDate,
+      vehicleLicense: trip.vehicle?.licensePlate,
+      vehicleMakeColor: trip.vehicle
+        ? `${trip.vehicle.make || ''} ${trip.vehicle.color || ''}`.trim()
+        : undefined,
+      vehicleType: trip.vehicle?.vehicleType,
+
+      ahcccsNumber: trip.member?.ahcccsNumber,
+      memberDob: this.formatDate(trip.member?.dateOfBirth),
+      memberName: trip.member
+        ? `${trip.member.firstName} ${trip.member.lastName}`
+        : trip.customerName,
+      mailingAddress: trip.member?.mailingAddress,
+
+      pickupAddress: trip.pickupAddress,
+      pickupTime,
+      pickupOdometer: trip.pickupOdometer,
+      dropoffAddress: trip.dropoffAddress,
+      dropoffTime,
+      dropoffOdometer: trip.dropoffOdometer,
+      tripMiles,
+
+      reasonForVisit: trip.reasonForVisit,
+      escortName: trip.escortName,
+      escortRelationship: trip.escortRelationship,
+
+      secondPickupAddress: trip.secondPickupAddress,
+      secondPickupTime: undefined,
+      secondPickupOdometer: trip.secondPickupOdometer,
+      secondDropoffAddress: trip.secondDropoffAddress,
+      secondDropoffTime: undefined,
+      secondDropoffOdometer: trip.secondDropoffOdometer,
+      secondTripMiles: undefined,
+
+      tripType: trip.tripType,
+      driverSignature: trip.driverSignatureUrl,
+      memberSignature: trip.memberSignatureUrl,
+    };
   }
 
-  private fillDriverVehicleInfo(form: PDFForm, trip: any) {
-    try {
-      // Driver's Name
-      if (trip.driver) {
-        const driverName = `${trip.driver.firstName} ${trip.driver.lastName}`;
-        this.setTextField(form, 'Drivers_Name', driverName);
-      }
+  async generateTripReportFromData(data: TripReportData): Promise<Buffer> {
+    const templateBytes = await fs.readFile(this.templatePath);
+    const pdfDoc = await PDFDocument.load(templateBytes);
+    const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+    const pages = pdfDoc.getPages();
 
-      // Date
-      const date = new Date(trip.scheduledPickupTime).toLocaleDateString(
-        'en-US',
-      );
-      this.setTextField(form, 'Date', date);
+    this.drawText(pages, font, data.providerInfo, tripReportLayout.providerInfo, 'providerInfo');
+    this.drawText(pages, font, data.driverName, tripReportLayout.driverName, 'driverName');
+    this.drawText(pages, font, data.tripDate, tripReportLayout.tripDate, 'tripDate');
+    this.drawText(pages, font, data.vehicleLicense, tripReportLayout.vehicleLicense, 'vehicleLicense');
+    this.drawText(pages, font, data.vehicleMakeColor, tripReportLayout.vehicleMakeColor, 'vehicleMakeColor');
 
-      // Vehicle Information
-      if (trip.vehicle) {
-        this.setTextField(
-          form,
-          'Vehicle_License_Fleet_ID',
-          trip.vehicle.licensePlate,
-        );
-        this.setTextField(
-          form,
-          'Vehicle_Make_Color',
-          `${trip.vehicle.make} ${trip.vehicle.color || ''}`,
-        );
+    this.drawText(pages, font, data.ahcccsNumber, tripReportLayout.ahcccsNumber, 'ahcccsNumber');
+    this.drawText(pages, font, data.memberDob, tripReportLayout.memberDob, 'memberDob');
+    this.drawText(pages, font, data.memberName, tripReportLayout.memberName, 'memberName');
+    this.drawText(pages, font, data.mailingAddress, tripReportLayout.mailingAddress, 'mailingAddress');
 
-        // Vehicle Type checkboxes
-        this.setVehicleTypeCheckbox(form, trip.vehicle.vehicleType);
-      }
-    } catch (error) {
-      this.logger.warn(
-        'Could not fill driver/vehicle info fields',
-        error.message,
-      );
-    }
+    this.drawText(pages, font, data.pickupAddress, tripReportLayout.pickupAddress, 'pickupAddress');
+    this.drawText(pages, font, data.pickupTime, tripReportLayout.pickupTime, 'pickupTime');
+    this.drawText(pages, font, this.formatNumber(data.pickupOdometer), tripReportLayout.pickupOdometer, 'pickupOdometer');
+    this.drawText(pages, font, data.dropoffAddress, tripReportLayout.dropoffAddress, 'dropoffAddress');
+    this.drawText(pages, font, data.dropoffTime, tripReportLayout.dropoffTime, 'dropoffTime');
+    this.drawText(pages, font, this.formatNumber(data.dropoffOdometer), tripReportLayout.dropoffOdometer, 'dropoffOdometer');
+    this.drawText(pages, font, this.formatNumber(data.tripMiles), tripReportLayout.tripMiles, 'tripMiles');
+
+    this.drawText(pages, font, data.reasonForVisit, tripReportLayout.reasonForVisit, 'reasonForVisit');
+    this.drawText(pages, font, data.escortName, tripReportLayout.escortName, 'escortName');
+    this.drawText(pages, font, data.escortRelationship, tripReportLayout.escortRelationship, 'escortRelationship');
+
+    this.drawText(pages, font, data.secondPickupAddress, tripReportLayout.secondPickupAddress, 'secondPickupAddress');
+    this.drawText(pages, font, data.secondPickupTime, tripReportLayout.secondPickupTime, 'secondPickupTime');
+    this.drawText(pages, font, this.formatNumber(data.secondPickupOdometer), tripReportLayout.secondPickupOdometer, 'secondPickupOdometer');
+    this.drawText(pages, font, data.secondDropoffAddress, tripReportLayout.secondDropoffAddress, 'secondDropoffAddress');
+    this.drawText(pages, font, data.secondDropoffTime, tripReportLayout.secondDropoffTime, 'secondDropoffTime');
+    this.drawText(pages, font, this.formatNumber(data.secondDropoffOdometer), tripReportLayout.secondDropoffOdometer, 'secondDropoffOdometer');
+    this.drawText(pages, font, this.formatNumber(data.secondTripMiles), tripReportLayout.secondTripMiles, 'secondTripMiles');
+
+    this.drawTripTypeCheckboxes(pages, data.tripType);
+    this.drawVehicleTypeCheckboxes(pages, data.vehicleType);
+
+    await this.drawSignature(pages, pdfDoc, data.memberSignature, tripReportLayout.signatures?.member, 'memberSignature');
+    await this.drawSignature(pages, pdfDoc, data.driverSignature, tripReportLayout.signatures?.driver, 'driverSignature');
+
+    const pdfBytes = await pdfDoc.save();
+    return Buffer.from(pdfBytes);
   }
 
-  private fillMemberInfo(form: PDFForm, trip: any) {
-    try {
-      // AHCCCS Number
-      if (trip.member?.ahcccsNumber) {
-        this.setTextField(form, 'AHCCCS_Number', trip.member.ahcccsNumber);
-      }
+  async savePdfToStorage(pdfBuffer: Buffer, tripId: string): Promise<string> {
+    const filename = `trip-report-${tripId}-${Date.now()}.pdf`;
 
-      // Date of Birth
-      if (trip.member?.dateOfBirth) {
-        const dob = new Date(trip.member.dateOfBirth).toLocaleDateString(
-          'en-US',
+    if (process.env.SUPABASE_URL && process.env.SUPABASE_KEY) {
+      try {
+        const supabase = createClient(
+          process.env.SUPABASE_URL,
+          process.env.SUPABASE_KEY,
         );
-        this.setTextField(form, 'Date_of_Birth', dob);
-      }
 
-      // Member Name
-      if (trip.member) {
-        const memberName = `${trip.member.firstName} ${trip.member.lastName}`;
-        this.setTextField(form, 'Member_Name', memberName);
-      } else if (trip.customerName) {
-        this.setTextField(form, 'Member_Name', trip.customerName);
-      }
+        const { error } = await supabase.storage
+          .from('trip-reports')
+          .upload(filename, pdfBuffer, {
+            contentType: 'application/pdf',
+            upsert: false,
+          });
 
-      // Mailing Address
-      if (trip.member?.mailingAddress) {
-        this.setTextField(form, 'Mailing_Address', trip.member.mailingAddress);
+        if (error) {
+          throw new Error(`Storage upload error: ${error.message}`);
+        }
+
+        const {
+          data: { publicUrl },
+        } = supabase.storage.from('trip-reports').getPublicUrl(filename);
+
+        this.logger.log(`Uploaded generated PDF to Supabase: ${publicUrl}`);
+        return publicUrl;
+      } catch (e) {
+        this.logger.warn(
+          `Supabase upload failed: ${e.message}. Falling back to local storage.`,
+        );
       }
-    } catch (error) {
-      this.logger.warn('Could not fill member info fields', error.message);
     }
+
+    const uploadsDir = path.join(__dirname, '..', '..', 'uploads', 'reports');
+    await fs.mkdir(uploadsDir, { recursive: true });
+    const filepath = path.join(uploadsDir, filename);
+    await fs.writeFile(filepath, pdfBuffer);
+    this.logger.log(`Saved PDF report to ${filepath}`);
+    return `/uploads/reports/${filename}`;
   }
 
-  private fillTripDetails(form: PDFForm, trip: any) {
-    try {
-      // 1st Pick-Up Location
-      this.setTextField(form, '1st_Pickup_Location', trip.pickupAddress);
-
-      // 1st Pick-Up Time
-      if (trip.actualPickupTime) {
-        const pickupTime = new Date(trip.actualPickupTime).toLocaleTimeString(
-          'en-US',
-          { hour: '2-digit', minute: '2-digit' },
-        );
-        this.setTextField(form, '1st_Pickup_Time', pickupTime);
-      }
-
-      // 1st Pick-Up Odometer
-      if (trip.pickupOdometer) {
-        this.setTextField(
-          form,
-          '1st_Pickup_Odometer',
-          trip.pickupOdometer.toString(),
-        );
-      }
-
-      // 1st Drop-Off Location
-      this.setTextField(form, '1st_Dropoff_Location', trip.dropoffAddress);
-
-      // 1st Drop-Off Time
-      if (trip.actualDropoffTime) {
-        const dropoffTime = new Date(trip.actualDropoffTime).toLocaleTimeString(
-          'en-US',
-          { hour: '2-digit', minute: '2-digit' },
-        );
-        this.setTextField(form, '1st_Dropoff_Time', dropoffTime);
-      }
-
-      // 1st Drop-Off Odometer
-      if (trip.dropoffOdometer) {
-        this.setTextField(
-          form,
-          '1st_Dropoff_Odometer',
-          trip.dropoffOdometer.toString(),
-        );
-      }
-
-      // Trip Miles
-      if (trip.tripMiles) {
-        this.setTextField(form, '1st_Trip_Miles', trip.tripMiles.toString());
-      } else if (trip.pickupOdometer && trip.dropoffOdometer) {
-        const miles = trip.dropoffOdometer - trip.pickupOdometer;
-        this.setTextField(form, '1st_Trip_Miles', miles.toString());
-      }
-
-      // Type of Trip
-      this.setTripTypeCheckbox(form, trip.tripType, '1st_Trip');
-
-      // Reason for Visit
-      if (trip.reasonForVisit) {
-        this.setTextField(form, 'Reason_for_Visit', trip.reasonForVisit);
-      }
-
-      // Escort Information
-      if (trip.escortName) {
-        this.setTextField(form, 'Name_of_Escort', trip.escortName);
-      }
-      if (trip.escortRelationship) {
-        this.setTextField(form, 'Relationship', trip.escortRelationship);
-      }
-
-      // For Round Trips - 2nd Pickup/Dropoff
-      if (
-        trip.tripType === 'round-trip' ||
-        trip.tripType === 'multiple-stops'
-      ) {
-        if (trip.secondPickupAddress) {
-          this.setTextField(
-            form,
-            '2nd_Pickup_Location',
-            trip.secondPickupAddress,
-          );
-        }
-
-        if (trip.secondPickupOdometer) {
-          this.setTextField(
-            form,
-            '2nd_Pickup_Odometer',
-            trip.secondPickupOdometer.toString(),
-          );
-        }
-
-        if (trip.secondDropoffAddress) {
-          this.setTextField(
-            form,
-            '2nd_Dropoff_Location',
-            trip.secondDropoffAddress,
-          );
-        }
-
-        if (trip.secondDropoffOdometer) {
-          this.setTextField(
-            form,
-            '2nd_Dropoff_Odometer',
-            trip.secondDropoffOdometer.toString(),
-          );
-        }
-
-        // 2nd Trip Miles
-        if (trip.secondPickupOdometer && trip.secondDropoffOdometer) {
-          const miles = trip.secondDropoffOdometer - trip.secondPickupOdometer;
-          this.setTextField(form, '2nd_Trip_Miles', miles.toString());
-        }
-
-        // Type of 2nd Trip
-        this.setTripTypeCheckbox(form, trip.tripType, '2nd_Trip');
-      }
-    } catch (error) {
-      this.logger.warn('Could not fill trip detail fields', error.message);
-    }
-  }
-
-  private setTextField(form: PDFForm, fieldName: string, value: string) {
-    try {
-      const field = form.getTextField(fieldName);
-      if (field) {
-        field.setText(value);
-      }
-    } catch (error) {
-      this.logger.debug(`Field ${fieldName} not found or not a text field`);
-    }
-  }
-
-  private setVehicleTypeCheckbox(form: PDFForm, vehicleType: string) {
-    try {
-      const checkboxMap: Record<string, string> = {
-        'Wheelchair Van': 'Wheelchair_Van',
-        Taxi: 'Taxi',
-        Bus: 'Bus',
-        'Stretcher Car': 'Stretcher_Car',
-        Other: 'Other_Vehicle',
-      };
-
-      const checkboxName = checkboxMap[vehicleType];
-      if (checkboxName) {
-        const checkbox = form.getCheckBox(checkboxName);
-        if (checkbox) {
-          checkbox.check();
-        }
-      }
-    } catch (error) {
-      this.logger.debug(`Could not set vehicle type checkbox: ${error.message}`);
-    }
-  }
-
-  private setTripTypeCheckbox(
-    form: PDFForm,
-    tripType: string,
-    prefix: string,
+  private drawText(
+    pages: any[],
+    font: any,
+    text: string | undefined,
+    position: TextPosition | undefined,
+    label: string,
   ) {
-    try {
-      const checkboxMap: Record<string, string> = {
-        'one-way': `${prefix}_One_Way`,
-        'round-trip': `${prefix}_Round_Trip`,
-        'multiple-stops': `${prefix}_Multiple_Stops`,
-      };
-
-      const checkboxName = checkboxMap[tripType];
-      if (checkboxName) {
-        const checkbox = form.getCheckBox(checkboxName);
-        if (checkbox) {
-          checkbox.check();
-        }
-      }
-    } catch (error) {
-      this.logger.debug(`Could not set trip type checkbox: ${error.message}`);
+    if (!text) return;
+    if (!position) {
+      this.logger.warn(`Missing coordinates for ${label}`);
+      return;
     }
+
+    const page = pages[position.page] ?? pages[0];
+    const size = position.size ?? 10;
+    const lineHeight = position.lineHeight ?? size + 2;
+    const lines = position.maxWidth
+      ? this.wrapText(text, font, size, position.maxWidth)
+      : [text];
+
+    lines.forEach((line, index) => {
+      const y = position.y - index * lineHeight;
+      const x = this.getAlignedX(position, font, line, size);
+      page.drawText(line, { x, y, size, font });
+    });
   }
 
-  /**
-   * Embed driver and member signatures into the PDF
-   * Signatures are stored as base64 data URLs (data:image/png;base64,...)
-   */
-  private async embedSignatures(pdfDoc: PDFDocument, trip: any): Promise<void> {
-    try {
-      const pages = pdfDoc.getPages();
-      const firstPage = pages[0];
-      const { width, height } = firstPage.getSize();
+  private drawTripTypeCheckboxes(pages: any[], tripType?: string) {
+    const checkboxes = tripReportLayout.checkboxes;
+    if (!checkboxes || !tripType) return;
 
-      // Signature dimensions and positions (adjust based on your PDF template)
-      const signatureWidth = 150;
-      const signatureHeight = 50;
-
-      // Driver signature position (bottom left area of form)
-      const driverSignatureX = 50;
-      const driverSignatureY = 80;
-
-      // Member signature position (bottom right area of form)
-      const memberSignatureX = width - signatureWidth - 50;
-      const memberSignatureY = 80;
-
-      // Embed driver signature if available
-      if (trip.driverSignatureUrl) {
-        try {
-          const driverSigImage = await this.embedBase64Image(pdfDoc, trip.driverSignatureUrl);
-          if (driverSigImage) {
-            firstPage.drawImage(driverSigImage, {
-              x: driverSignatureX,
-              y: driverSignatureY,
-              width: signatureWidth,
-              height: signatureHeight,
-            });
-            this.logger.log('Embedded driver signature in PDF');
-          }
-        } catch (err) {
-          this.logger.warn(`Could not embed driver signature: ${err.message}`);
-        }
-      }
-
-      // Embed member signature if available
-      if (trip.memberSignatureUrl) {
-        try {
-          const memberSigImage = await this.embedBase64Image(pdfDoc, trip.memberSignatureUrl);
-          if (memberSigImage) {
-            firstPage.drawImage(memberSigImage, {
-              x: memberSignatureX,
-              y: memberSignatureY,
-              width: signatureWidth,
-              height: signatureHeight,
-            });
-            this.logger.log('Embedded member signature in PDF');
-          }
-        } catch (err) {
-          this.logger.warn(`Could not embed member signature: ${err.message}`);
-        }
-      }
-    } catch (error) {
-      this.logger.warn(`Could not embed signatures: ${error.message}`);
-    }
+    this.drawCheckbox(
+      pages,
+      checkboxes.tripTypeOneWay,
+      tripType === 'one-way',
+      'tripTypeOneWay',
+    );
+    this.drawCheckbox(
+      pages,
+      checkboxes.tripTypeRoundTrip,
+      tripType === 'round-trip',
+      'tripTypeRoundTrip',
+    );
+    this.drawCheckbox(
+      pages,
+      checkboxes.tripTypeMultipleStops,
+      tripType === 'multiple-stops',
+      'tripTypeMultipleStops',
+    );
   }
 
-  /**
-   * Convert base64 data URL to embedded PDF image
-   */
+  private drawVehicleTypeCheckboxes(pages: any[], vehicleType?: string) {
+    const checkboxes = tripReportLayout.checkboxes;
+    if (!checkboxes || !vehicleType) return;
+
+    const normalized = vehicleType.toLowerCase();
+    this.drawCheckbox(
+      pages,
+      checkboxes.vehicleTaxi,
+      normalized.includes('taxi'),
+      'vehicleTaxi',
+    );
+    this.drawCheckbox(
+      pages,
+      checkboxes.vehicleWheelchairVan,
+      normalized.includes('wheelchair'),
+      'vehicleWheelchairVan',
+    );
+    this.drawCheckbox(
+      pages,
+      checkboxes.vehicleBus,
+      normalized.includes('bus'),
+      'vehicleBus',
+    );
+    this.drawCheckbox(
+      pages,
+      checkboxes.vehicleStretcherCar,
+      normalized.includes('stretcher'),
+      'vehicleStretcherCar',
+    );
+    this.drawCheckbox(
+      pages,
+      checkboxes.vehicleOther,
+      normalized.includes('other'),
+      'vehicleOther',
+    );
+  }
+
+  private drawCheckbox(
+    pages: any[],
+    position: BoxPosition | undefined,
+    shouldDraw: boolean,
+    label: string,
+  ) {
+    if (!shouldDraw) return;
+    if (!position) {
+      this.logger.warn(`Missing coordinates for ${label}`);
+      return;
+    }
+    const page = pages[position.page] ?? pages[0];
+    const size = Math.min(position.width, position.height);
+    page.drawText('X', {
+      x: position.x,
+      y: position.y,
+      size: size || 10,
+    });
+  }
+
+  private async drawSignature(
+    pages: any[],
+    pdfDoc: PDFDocument,
+    dataUrl: string | undefined,
+    position: BoxPosition | undefined,
+    label: string,
+  ) {
+    if (!dataUrl) return;
+    if (!position) {
+      this.logger.warn(`Missing coordinates for ${label}`);
+      return;
+    }
+
+    const page = pages[position.page] ?? pages[0];
+    const image = await this.embedBase64Image(pdfDoc, dataUrl);
+    if (!image) return;
+
+    page.drawImage(image, {
+      x: position.x,
+      y: position.y,
+      width: position.width,
+      height: position.height,
+    });
+  }
+
   private async embedBase64Image(pdfDoc: PDFDocument, dataUrl: string) {
     if (!dataUrl || !dataUrl.startsWith('data:image')) {
       return null;
     }
 
-    // Extract base64 data after the comma
     const base64Data = dataUrl.split(',')[1];
-    if (!base64Data) {
-      return null;
-    }
+    if (!base64Data) return null;
 
     const imageBytes = Buffer.from(base64Data, 'base64');
 
-    // Determine image type and embed accordingly
     if (dataUrl.includes('image/png')) {
       return pdfDoc.embedPng(imageBytes);
-    } else if (dataUrl.includes('image/jpeg') || dataUrl.includes('image/jpg')) {
+    }
+    if (dataUrl.includes('image/jpeg') || dataUrl.includes('image/jpg')) {
       return pdfDoc.embedJpg(imageBytes);
     }
 
-    // Default to PNG for unknown formats
     try {
       return pdfDoc.embedPng(imageBytes);
     } catch {
@@ -430,20 +402,56 @@ export class PdfService {
     }
   }
 
-  /**
-   * Save the generated PDF to the filesystem
-   * Returns the file path
-   */
-  async savePdfToFile(pdfBuffer: Buffer, tripId: string): Promise<string> {
-    const uploadsDir = path.join(__dirname, '..', '..', 'uploads', 'reports');
-    await fs.mkdir(uploadsDir, { recursive: true });
+  private wrapText(text: string, font: any, size: number, maxWidth: number) {
+    const words = text.split(/\s+/);
+    const lines: string[] = [];
+    let current = '';
 
-    const filename = `trip-report-${tripId}-${Date.now()}.pdf`;
-    const filepath = path.join(uploadsDir, filename);
+    for (const word of words) {
+      const candidate = current ? `${current} ${word}` : word;
+      const width = font.widthOfTextAtSize(candidate, size);
+      if (width <= maxWidth) {
+        current = candidate;
+      } else {
+        if (current) lines.push(current);
+        current = word;
+      }
+    }
 
-    await fs.writeFile(filepath, pdfBuffer);
-    this.logger.log(`Saved PDF report to ${filepath}`);
+    if (current) lines.push(current);
+    return lines;
+  }
 
-    return `/uploads/reports/${filename}`;
+  private getAlignedX(position: TextPosition, font: any, text: string, size: number) {
+    if (!position.align || position.align === 'left') {
+      return position.x;
+    }
+    const textWidth = font.widthOfTextAtSize(text, size);
+    if (position.align === 'center') {
+      return position.x - textWidth / 2;
+    }
+    return position.x - textWidth;
+  }
+
+  private formatDate(value?: Date | string | null) {
+    if (!value) return undefined;
+    const date = value instanceof Date ? value : new Date(value);
+    if (Number.isNaN(date.getTime())) return undefined;
+    return date.toLocaleDateString('en-US');
+  }
+
+  private formatTime(value?: Date | string | null) {
+    if (!value) return undefined;
+    const date = value instanceof Date ? value : new Date(value);
+    if (Number.isNaN(date.getTime())) return undefined;
+    return date.toLocaleTimeString('en-US', {
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  }
+
+  private formatNumber(value?: string | number) {
+    if (value === undefined || value === null || value === '') return undefined;
+    return typeof value === 'number' ? value.toString() : value;
   }
 }

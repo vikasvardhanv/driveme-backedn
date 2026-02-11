@@ -91,6 +91,22 @@ export class AzugaController {
     }
 
     /**
+     * Manually trigger vehicle sync from Azuga API
+     */
+    @Post('sync-vehicles')
+    async syncVehicles() {
+        this.logger.log('Manual vehicle sync triggered');
+        try {
+            const result = await this.azugaService.syncVehiclesFromAzuga();
+            this.logger.log(`Vehicle sync completed: ${JSON.stringify(result)}`);
+            return result;
+        } catch (error) {
+            this.logger.error(`Vehicle sync failed: ${error.message}`, error.stack);
+            throw error;
+        }
+    }
+
+    /**
      * Get the status of the last driver sync
      */
     @Get('sync-status')

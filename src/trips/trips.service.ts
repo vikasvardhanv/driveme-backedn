@@ -2,8 +2,9 @@ import { Injectable, Logger, HttpException, HttpStatus } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateTripDto } from './dto/create-trip.dto';
 import { UpdateTripDto } from './dto/update-trip.dto';
+import { SubmitTripReportDto } from './dto/submit-trip-report.dto';
 import { Prisma } from '@prisma/client';
-import { PdfService } from '../pdf/pdf.service';
+import { PdfService, TripReportData } from '../pdf/pdf.service';
 import { EmailService } from '../email/email.service';
 import { TrackingGateway } from '../tracking/tracking.gateway';
 
@@ -348,7 +349,7 @@ export class TripsService {
       const pdfBuffer = await this.pdfService.generateTripReport(tripId);
 
       // Save PDF URL to database
-      const pdfUrl = await this.pdfService.savePdfToFile(pdfBuffer, tripId);
+      const pdfUrl = await this.pdfService.savePdfToStorage(pdfBuffer, tripId);
       await this.prisma.trip.update({
         where: { id: tripId },
         data: { pdfReportUrl: pdfUrl },
@@ -397,13 +398,121 @@ export class TripsService {
     const pdfBuffer = await this.pdfService.generateTripReport(tripId);
 
     // Save PDF URL to database
-    const pdfUrl = await this.pdfService.savePdfToFile(pdfBuffer, tripId);
+    const pdfUrl = await this.pdfService.savePdfToStorage(pdfBuffer, tripId);
     await this.prisma.trip.update({
       where: { id: tripId },
       data: { pdfReportUrl: pdfUrl },
     });
 
     return pdfBuffer;
+  }
+
+  /**
+   * Submit completed trip report data/signatures and store the filled PDF
+   */
+  async submitTripReport(tripId: string, submitTripReportDto: SubmitTripReportDto) {
+    const trip = await this.prisma.trip.findUnique({
+      where: { id: tripId },
+      include: {
+        driver: true,
+        member: true,
+        vehicle: true,
+        company: true,
+      },
+    });
+
+    if (!trip) {
+      throw new HttpException(`Trip ${tripId} not found`, HttpStatus.NOT_FOUND);
+    }
+
+    if (!trip.company) {
+      throw new HttpException(
+        `Trip ${tripId} has no company assigned`,
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
+    const baseData = this.pdfService.buildTripReportData(trip);
+    const overrideData = this.mapSubmitDtoToReportData(submitTripReportDto);
+    const reportData: TripReportData = { ...baseData, ...overrideData };
+
+    const pdfBuffer = await this.pdfService.generateTripReportFromData(reportData);
+    const pdfUrl = await this.pdfService.savePdfToStorage(pdfBuffer, tripId);
+
+    const updateData: Prisma.TripUpdateInput = {
+      pdfReportUrl: pdfUrl,
+    };
+
+    if (submitTripReportDto.pickupOdometer !== undefined) {
+      updateData.pickupOdometer = submitTripReportDto.pickupOdometer;
+    }
+    if (submitTripReportDto.dropoffOdometer !== undefined) {
+      updateData.dropoffOdometer = submitTripReportDto.dropoffOdometer;
+    }
+    if (submitTripReportDto.tripMiles !== undefined) {
+      updateData.tripMiles = submitTripReportDto.tripMiles;
+    }
+    if (submitTripReportDto.reasonForVisit !== undefined) {
+      updateData.reasonForVisit = submitTripReportDto.reasonForVisit;
+    }
+    if (submitTripReportDto.escortName !== undefined) {
+      updateData.escortName = submitTripReportDto.escortName;
+    }
+    if (submitTripReportDto.escortRelationship !== undefined) {
+      updateData.escortRelationship = submitTripReportDto.escortRelationship;
+    }
+    if (submitTripReportDto.secondPickupOdometer !== undefined) {
+      updateData.secondPickupOdometer = submitTripReportDto.secondPickupOdometer;
+    }
+    if (submitTripReportDto.secondDropoffOdometer !== undefined) {
+      updateData.secondDropoffOdometer = submitTripReportDto.secondDropoffOdometer;
+    }
+    if (submitTripReportDto.actualPickupTime) {
+      updateData.actualPickupTime = new Date(submitTripReportDto.actualPickupTime);
+    }
+    if (submitTripReportDto.actualDropoffTime) {
+      updateData.actualDropoffTime = new Date(submitTripReportDto.actualDropoffTime);
+    }
+    await this.prisma.trip.update({
+      where: { id: tripId },
+      data: updateData,
+    });
+
+    return { pdfUrl };
+  }
+
+  private mapSubmitDtoToReportData(
+    submitTripReportDto: SubmitTripReportDto,
+  ): Partial<TripReportData> {
+    return {
+      driverName: submitTripReportDto.driverName,
+      tripDate: submitTripReportDto.tripDate,
+      vehicleLicense: submitTripReportDto.vehicleNumber,
+      vehicleMakeColor: submitTripReportDto.vehicleMakeColor,
+      vehicleType: submitTripReportDto.vehicleType,
+      ahcccsNumber: submitTripReportDto.ahcccsNumber,
+      memberDob: submitTripReportDto.memberDob,
+      memberName: submitTripReportDto.memberName,
+      mailingAddress: submitTripReportDto.mailingAddress,
+      pickupAddress: submitTripReportDto.pickupAddress,
+      pickupTime: submitTripReportDto.pickupTime,
+      pickupOdometer: submitTripReportDto.pickupOdometer,
+      dropoffAddress: submitTripReportDto.dropoffAddress,
+      dropoffTime: submitTripReportDto.dropoffTime,
+      dropoffOdometer: submitTripReportDto.dropoffOdometer,
+      tripMiles: submitTripReportDto.tripMiles,
+      tripType: submitTripReportDto.tripType,
+      reasonForVisit: submitTripReportDto.reasonForVisit,
+      escortName: submitTripReportDto.escortName,
+      escortRelationship: submitTripReportDto.escortRelationship,
+      secondPickupAddress: submitTripReportDto.secondPickupAddress,
+      secondPickupTime: submitTripReportDto.secondPickupTime,
+      secondPickupOdometer: submitTripReportDto.secondPickupOdometer,
+      secondDropoffAddress: submitTripReportDto.secondDropoffAddress,
+      secondDropoffTime: submitTripReportDto.secondDropoffTime,
+      secondDropoffOdometer: submitTripReportDto.secondDropoffOdometer,
+      secondTripMiles: submitTripReportDto.secondTripMiles,
+    };
   }
 
   async remove(id: string) {

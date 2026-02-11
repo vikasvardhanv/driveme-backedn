@@ -3,6 +3,7 @@ import type { Response } from 'express';
 import { TripsService } from './trips.service';
 import { CreateTripDto } from './dto/create-trip.dto';
 import { UpdateTripDto } from './dto/update-trip.dto';
+import { SubmitTripReportDto } from './dto/submit-trip-report.dto';
 
 @Controller('trips')
 export class TripsController {
@@ -55,6 +56,15 @@ export class TripsController {
         error: error.message,
       });
     }
+  }
+
+  /**
+   * Submit completed AHCCCS trip report data and signatures
+   * Generates and stores the filled PDF for dispatch download
+   */
+  @Post(':id/submit-report')
+  submitReport(@Param('id') id: string, @Body() submitTripReportDto: SubmitTripReportDto) {
+    return this.tripsService.submitTripReport(id, submitTripReportDto);
   }
   @Get('drivers/list')
   getDrivers() {

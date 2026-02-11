@@ -62,6 +62,7 @@ export interface DriverSyncResult {
 @Injectable()
 export class AzugaService {
   private readonly logger = new Logger(AzugaService.name);
+  private readonly KM_TO_MILES = 0.621371;
 
   // In-memory cache of vehicle data from webhooks
   private vehicleCache: Map<string, CachedVehicle> = new Map();
@@ -86,6 +87,61 @@ export class AzugaService {
     private trackingGateway: TrackingGateway,
     private emailService: EmailService,
   ) { }
+
+  private toMiles(value: number, decimals?: number) {
+    const miles = value * this.KM_TO_MILES;
+    if (decimals === undefined) {
+      return miles;
+    }
+    return parseFloat(miles.toFixed(decimals));
+  }
+
+  private normalizeOdometerMiles(value: any): number | null {
+    const raw = parseFloat(value?.toString?.() ?? value);
+    if (Number.isNaN(raw) || raw <= 0) {
+      return null;
+    }
+    return Math.round(this.toMiles(raw));
+  }
+
+  private normalizeDistanceMiles(value: any): number | null {
+    const raw = parseFloat(value?.toString?.() ?? value);
+    if (Number.isNaN(raw) || raw <= 0) {
+      return null;
+    }
+    return this.toMiles(raw, 1);
+  }
+
+  private parseAzugaTimestamp(event: any): Date | null {
+    const candidates = [
+      event?.locationTime,
+      event?.eventTime,
+      event?.timestamp,
+      event?.time,
+    ];
+
+    for (const candidate of candidates) {
+      if (!candidate) continue;
+      if (typeof candidate === 'number') {
+        const ms = candidate < 1e12 ? candidate * 1000 : candidate;
+        const date = new Date(ms);
+        if (!Number.isNaN(date.getTime())) return date;
+      }
+      if (typeof candidate === 'string') {
+        const numeric = candidate.match(/^\d+$/);
+        if (numeric) {
+          const num = parseInt(candidate, 10);
+          const ms = num < 1e12 ? num * 1000 : num;
+          const date = new Date(ms);
+          if (!Number.isNaN(date.getTime())) return date;
+        }
+        const date = new Date(candidate);
+        if (!Number.isNaN(date.getTime())) return date;
+      }
+    }
+
+    return null;
+  }
 
   /**
    * Get the last sync result
@@ -218,6 +274,111 @@ export class AzugaService {
       password += chars.charAt(Math.floor(Math.random() * chars.length));
     }
     return password;
+  }
+
+  /**
+   * Scheduled job to sync vehicles every 30 minutes
+   */
+  @Cron(CronExpression.EVERY_30_MINUTES)
+  async scheduledVehicleSync() {
+    this.logger.log('Running scheduled Azuga vehicle sync...');
+    await this.syncVehiclesFromAzuga();
+  }
+
+  /**
+   * Sync vehicles from Azuga API to database
+   */
+  async syncVehiclesFromAzuga(): Promise<{ synced: number; created: number; updated: number; errors: string[] }> {
+    const result = {
+      synced: 0,
+      created: 0,
+      updated: 0,
+      errors: [] as string[],
+    };
+
+    try {
+      const azugaVehicles = await this.fetchVehiclesFromApi();
+
+      for (const azugaVehicle of azugaVehicles) {
+        try {
+          // Identify by VIN or Serial Number
+          const vin = azugaVehicle.vin || azugaVehicle.serialNumber || azugaVehicle.deviceSerialNo;
+          const name = azugaVehicle.vehicleName || azugaVehicle.name || `Vehicle ${vin}`;
+
+          if (!vin) {
+            continue;
+          }
+
+          // Check if vehicle exists
+          const existingVehicle = await this.prisma.vehicle.findFirst({
+            where: {
+              OR: [
+                { vin: vin },
+                { licensePlate: name }, // Fallback check
+              ]
+            }
+          });
+
+          const vehicleData = {
+            make: azugaVehicle.make || 'Unknown',
+            model: azugaVehicle.model || 'Unknown',
+            year: azugaVehicle.year ? parseInt(azugaVehicle.year) : undefined,
+            licensePlate: name, // Using name as license plate if not provided separately
+            vin: vin,
+            status: 'ACTIVE',
+            // Update location if available
+            currentLat: azugaVehicle.lastLocation?.latitude || azugaVehicle.latitude,
+            currentLng: azugaVehicle.lastLocation?.longitude || azugaVehicle.longitude,
+            lastLocationUpdate: new Date(),
+          };
+
+          if (existingVehicle) {
+            await this.prisma.vehicle.update({
+              where: { id: existingVehicle.id },
+              data: vehicleData,
+            });
+            result.updated++;
+          } else {
+            await this.prisma.vehicle.create({
+              data: {
+                ...vehicleData,
+                capacity: 4, // Default
+                vehicleType: 'Sedan', // Default
+              } as any,
+            });
+            result.created++;
+          }
+          result.synced++;
+
+          // Update memory cache for controller usage
+          const cachedVehicle: CachedVehicle = {
+            id: vin,
+            vehicleName: name,
+            driverName: null,
+            currentLat: vehicleData.currentLat || 0,
+            currentLng: vehicleData.currentLng || 0,
+            currentSpeed: azugaVehicle.speed ? parseFloat(azugaVehicle.speed) : 0,
+            address: azugaVehicle.location || azugaVehicle.address || null,
+            lastLocationUpdate: new Date().toISOString(),
+            ignitionStatus: azugaVehicle.ignitionStatus || 'Unknown',
+            status: (azugaVehicle.speed && parseFloat(azugaVehicle.speed) > 0) ? 'moving' : 'offline',
+            isMoving: (azugaVehicle.speed && parseFloat(azugaVehicle.speed) > 0),
+            make: vehicleData.make,
+            model: vehicleData.model,
+            vin: vin,
+          };
+          this.vehicleCache.set(vin, cachedVehicle);
+        } catch (vError) {
+          result.errors.push(`Failed to sync vehicle ${azugaVehicle.vehicleName}: ${vError.message}`);
+        }
+      }
+
+      this.logger.log(`Vehicle sync complete: ${result.created} created, ${result.updated} updated`);
+      return result;
+    } catch (error) {
+      this.logger.error('Failed to sync vehicles from Azuga', error);
+      throw error;
+    }
   }
 
   /**
@@ -511,19 +672,22 @@ export class AzugaService {
         const odometer = event.odometer || event.odometerReading || event.currentOdometer ||
           event.totalDistance || event.mileage;
 
+        const eventTime = this.parseAzugaTimestamp(event);
         const updateData: any = {
           currentLat: latitude,
           currentLng: longitude,
           currentSpeed: speed,
-          lastLocationUpdate: new Date(),
+          lastLocationUpdate: eventTime || new Date(),
         };
 
         // Update odometer if present
         if (odometer !== undefined && odometer !== null) {
-          const odometerValue = parseInt(odometer.toString());
-          if (!isNaN(odometerValue) && odometerValue > 0) {
-            updateData.currentOdometer = odometerValue;
-            this.logger.log(`Updating vehicle ${dbVehicle.id} odometer to ${odometerValue}`);
+          const odometerMiles = this.normalizeOdometerMiles(odometer);
+          if (odometerMiles !== null) {
+            updateData.currentOdometer = odometerMiles;
+            this.logger.log(
+              `Updating vehicle ${dbVehicle.id} odometer to ${odometerMiles} miles`,
+            );
           }
         }
 
@@ -575,8 +739,12 @@ export class AzugaService {
 
           // Calculate trip miles if we have both odometers
           if (trip.pickupOdometer && currentOdometer > trip.pickupOdometer) {
-            updateData.tripMiles = parseFloat(((currentOdometer - trip.pickupOdometer) / 10).toFixed(1));
-            this.logger.log(`Auto-calculated trip miles for trip ${trip.id}: ${updateData.tripMiles}`);
+            updateData.tripMiles = parseFloat(
+              (currentOdometer - trip.pickupOdometer).toFixed(1),
+            );
+            this.logger.log(
+              `Auto-calculated trip miles for trip ${trip.id}: ${updateData.tripMiles}`,
+            );
           }
         }
 
@@ -625,6 +793,8 @@ export class AzugaService {
         return;
       }
 
+      const eventTime = this.parseAzugaTimestamp(event);
+
       // Find active trip for this vehicle
       const activeTrip = await this.prisma.trip.findFirst({
         where: {
@@ -636,11 +806,22 @@ export class AzugaService {
       if (activeTrip) {
         const updateData: any = {};
 
+        // Set trip start time from Azuga event if missing
+        if (eventTime && !activeTrip.tripStartTime) {
+          updateData.tripStartTime = eventTime;
+        }
+
+        // Set trip start coordinates from Azuga GPS if missing
+        if (latitude && longitude && !activeTrip.tripStartLat) {
+          updateData.tripStartLat = latitude;
+          updateData.tripStartLng = longitude;
+        }
+
         // Set pickup odometer
         if (odometer) {
-          const odometerValue = parseInt(odometer.toString());
-          if (!isNaN(odometerValue) && !activeTrip.pickupOdometer) {
-            updateData.pickupOdometer = odometerValue;
+          const odometerMiles = this.normalizeOdometerMiles(odometer);
+          if (odometerMiles !== null && !activeTrip.pickupOdometer) {
+            updateData.pickupOdometer = odometerMiles;
           }
         }
 
@@ -700,6 +881,8 @@ export class AzugaService {
         return;
       }
 
+      const eventTime = this.parseAzugaTimestamp(event);
+
       // Find active/picked up trip for this vehicle
       const activeTrip = await this.prisma.trip.findFirst({
         where: {
@@ -711,15 +894,28 @@ export class AzugaService {
       if (activeTrip) {
         const updateData: any = {};
 
+        // Set actual dropoff time from Azuga event if missing
+        if (eventTime && !activeTrip.actualDropoffTime) {
+          updateData.actualDropoffTime = eventTime;
+        }
+
+        // Set completed coordinates from Azuga GPS if missing
+        if (latitude && longitude && !activeTrip.completedLat) {
+          updateData.completedLat = latitude;
+          updateData.completedLng = longitude;
+        }
+
         // Set dropoff odometer
         if (odometer) {
-          const odometerValue = parseInt(odometer.toString());
-          if (!isNaN(odometerValue)) {
-            updateData.dropoffOdometer = odometerValue;
+          const odometerMiles = this.normalizeOdometerMiles(odometer);
+          if (odometerMiles !== null) {
+            updateData.dropoffOdometer = odometerMiles;
 
             // Calculate miles if we have pickup odometer
-            if (activeTrip.pickupOdometer && odometerValue > activeTrip.pickupOdometer) {
-              updateData.tripMiles = parseFloat(((odometerValue - activeTrip.pickupOdometer) / 10).toFixed(1));
+            if (activeTrip.pickupOdometer && odometerMiles > activeTrip.pickupOdometer) {
+              updateData.tripMiles = parseFloat(
+                (odometerMiles - activeTrip.pickupOdometer).toFixed(1),
+              );
               this.logger.log(`Calculated trip miles: ${updateData.tripMiles}`);
             }
           }
@@ -734,7 +930,10 @@ export class AzugaService {
 
         // If Azuga provides trip distance directly
         if (tripDistance && !updateData.tripMiles) {
-          updateData.tripMiles = parseFloat(tripDistance.toString());
+          const tripMiles = this.normalizeDistanceMiles(tripDistance);
+          if (tripMiles !== null) {
+            updateData.tripMiles = tripMiles;
+          }
         }
 
         if (Object.keys(updateData).length > 0) {
@@ -808,128 +1007,4 @@ export class AzugaService {
     }
   }
 
-  /**
-   * Sync vehicles from Azuga API to database
-   */
-  async syncVehiclesFromAzuga(): Promise<DriverSyncResult> {
-    const result: DriverSyncResult = {
-      synced: 0,
-      created: 0,
-      updated: 0,
-      errors: [],
-      lastSyncAt: new Date().toISOString(),
-    };
-
-    try {
-      const azugaVehicles = await this.fetchVehiclesFromApi();
-
-      for (const vehicle of azugaVehicles) {
-        try {
-          const vin = vehicle.vin || vehicle.deviceSerial || vehicle.serialNumber || vehicle.serialNum;
-          const licensePlate = vehicle.licensePlate || vehicle.licensePlateNo || vehicle.vehicleName || vehicle.name;
-
-          if (!vin || !licensePlate) {
-            // Skip if essential identifiers are missing
-            continue;
-          }
-
-          const make = vehicle.make || 'Unknown';
-          const model = vehicle.model || 'Unknown';
-          const year = parseInt(vehicle.year) || 2020; // Default year if missing
-
-          // Check if vehicle exists
-          const existingVehicle = await this.prisma.vehicle.findUnique({
-            where: { vin },
-          });
-
-          if (existingVehicle) {
-            // Update
-            await this.prisma.vehicle.update({
-              where: { id: existingVehicle.id },
-              data: {
-                make,
-                model,
-                year,
-                licensePlate, // Ideally we shouldn't change unique fields easily, but if it changed in Azuga..
-                currentSpeed: vehicle.speed ? parseFloat(vehicle.speed) : undefined,
-                updatedAt: new Date(),
-              }
-            });
-            result.updated++;
-          } else {
-            // Create
-            // Need to handle licensePlate uniqueness too
-            const existingPlate = await this.prisma.vehicle.findUnique({ where: { licensePlate } });
-            if (existingPlate) {
-              // If VIN is new but plate exists, maybe skip or update that one? 
-              // For now, assume data integrity issue and skip or log
-              this.logger.warn(`Vehicle creation conflict: License plate ${licensePlate} already exists for another VIN`);
-              continue;
-            }
-
-            await this.prisma.vehicle.create({
-              data: {
-                make,
-                model,
-                year,
-                licensePlate,
-                vin,
-                isActive: true,
-                vehicleType: 'Taxi', // Default
-                wheelchairAccessible: vehicle.vehicleType?.toLowerCase().includes('wheelchair') || false,
-                oxygenCapable: false, // Default to false unless specified
-              }
-            });
-            result.created++;
-          }
-          result.synced++;
-
-          // Cache the vehicle
-          this.cacheVehicleFromApi(vehicle);
-
-        } catch (vError) {
-          result.errors.push(`Failed to sync vehicle ${vehicle.vehicleName}: ${vError.message}`);
-        }
-      }
-
-      return result;
-    } catch (error) {
-      this.logger.error('Vehicle sync failed', error);
-      result.errors.push(error.message);
-      return result;
-    }
-  }
-
-  /**
-   * Cache vehicle from Azuga API response
-   */
-  private cacheVehicleFromApi(vehicle: any) {
-    const vin = vehicle.vin || vehicle.deviceSerial || vehicle.serialNumber;
-    if (!vin) return;
-
-    const vehicleName = vehicle.licensePlate || vehicle.vehicleName || vehicle.name || vin;
-    const speed = vehicle.speed ? parseFloat(vehicle.speed) : 0;
-
-    // Check existing cache to preserve location if API response lacks it
-    const existingCache = this.vehicleCache.get(vin);
-
-    const cachedVehicle: CachedVehicle = {
-      id: vin,
-      vehicleName,
-      driverName: vehicle.driverName || (existingCache?.driverName) || null,
-      currentLat: vehicle.latitude ? parseFloat(vehicle.latitude) : (existingCache?.currentLat || 0),
-      currentLng: vehicle.longitude ? parseFloat(vehicle.longitude) : (existingCache?.currentLng || 0),
-      currentSpeed: speed,
-      address: vehicle.location || (existingCache?.address) || null,
-      lastLocationUpdate: new Date().toISOString(),
-      ignitionStatus: existingCache?.ignitionStatus || 'Unknown',
-      status: speed > 0 ? 'moving' : (existingCache?.status || 'offline'),
-      isMoving: speed > 0,
-      make: vehicle.make || 'Unknown',
-      model: vehicle.model || 'Unknown',
-      vin: vin,
-    };
-
-    this.vehicleCache.set(vin, cachedVehicle);
-  }
 }

@@ -19,14 +19,28 @@ async function main() {
         },
     });
 
-    // Create Driver
-    const driver = await prisma.user.upsert({
+    // Create Driver 1
+    const driver1 = await prisma.user.upsert({
         where: { email: 'driver1@yazdrive.com' },
         update: {},
         create: {
             email: 'driver1@yazdrive.com',
             password: hashedPassword,
             firstName: 'John',
+            lastName: 'Driver',
+            role: 'DRIVER',
+        },
+    });
+
+    // Create Main Driver Account
+    const mainDriverPassword = await bcrypt.hash('password123', 10);
+    const mainDriver = await prisma.user.upsert({
+        where: { email: 'driver@yazdrive.com' },
+        update: {},
+        create: {
+            email: 'driver@yazdrive.com',
+            password: mainDriverPassword,
+            firstName: 'Yaz',
             lastName: 'Driver',
             role: 'DRIVER',
         },
@@ -45,7 +59,7 @@ async function main() {
         },
     });
 
-    console.log({ admin, driver, dispatcher });
+    console.log({ admin, driver1, mainDriver, dispatcher });
 }
 
 main()
