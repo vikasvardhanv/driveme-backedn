@@ -19,7 +19,7 @@ export class SeedController {
         where: { ahcccsProviderId: 'TEST001' },
         update: {},
         create: {
-          name: 'YazTrans LLC',
+          name: 'Yaz Trans LLC',
           ahcccsProviderId: 'TEST001',
           address: '123 Main St, Phoenix, AZ',
           phone: '555-0100',

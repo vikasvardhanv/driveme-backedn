@@ -21,3 +21,4 @@ Thumbs.db
 !.env.example
 
 /generated/prisma
+SQL_FIX_SPATIAL_REF_SYS.sql
